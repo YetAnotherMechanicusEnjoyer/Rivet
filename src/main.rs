@@ -42,5 +42,7 @@ async fn main() -> Result<(), Error> {
         println!("{} -> {content}", msg.author.username);
     });
 
+    messages.iter().for_each(|msg| println!("{msg:?}"));
+
     Ok(())
 }
