@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 pub type Snowflake = u64;
 
-pub type Timestamp = u64;
+pub type Timestamp = String;
 
 #[derive(Debug, Deserialize)]
 pub struct User {
