@@ -1,6 +1,6 @@
 use reqwest::Client;
 
-use crate::Message;
+use crate::{Error, Message};
 
 pub async fn get_channel_messages(
     channel_id: &str,
@@ -9,7 +9,7 @@ pub async fn get_channel_messages(
     before: Option<String>,
     after: Option<String>,
     limit: Option<String>,
-) -> Result<Vec<Message>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Message>, Error> {
     let mut api_url = format!("https://discord.com/api/v10/channels/{channel_id}/messages?");
 
     if let Some(around) = around {
