@@ -6,7 +6,12 @@ pub type Timestamp = String;
 
 #[derive(Debug, Deserialize)]
 pub struct User {
+    //pub id: Snowflake,
     pub username: String,
+    //pub discriminator: String,
+    //pub global_name: Option<String>,
+    //pub avatar : Option<String>,
+    //pub bot: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,11 +79,11 @@ pub enum Nonce {
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
-    pub id: Snowflake,
-    pub channel_id: Snowflake,
+    //pub id: Snowflake,
+    //pub channel_id: Snowflake,
     pub author: User,
     pub content: Option<String>,
-    pub timestamp: Timestamp,
+    /*pub timestamp: Timestamp,
     pub edited_timestamp: Option<Timestamp>,
     pub tts: bool,
     pub mention_everyone: bool,
@@ -109,5 +114,5 @@ pub struct Message {
     pub role_subscription_data: Option<RoleSubscriptionData>,
     pub resolved: Option<Resolved>,
     pub poll: Option<Box<Poll>>,
-    pub call: Option<MessageCall>,
+    pub call: Option<MessageCall>,*/
 }
