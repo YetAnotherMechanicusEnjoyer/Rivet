@@ -9,4 +9,4 @@ When Vim mode is enabled and you are in **Normal Mode**, you can type `:` to ent
 | `:quit` / `:q` | Quit the application |
 | `:debug <message>` | Print a debug message to the logs |
 | `:logs` | Open logs panel |
-| `:status <online\|dnd\|idle\|invisible\|offline> <text>` | Change user status & custom status |
+| `:status <online\|dnd\|idle\|invisible\|invisible_dnd> <text>` | Change user status & custom status |

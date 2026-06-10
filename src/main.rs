@@ -12,7 +12,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, enable_raw_mode},
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
-use reqwest::Client;
+use reqwest::Client as ReqwestClient;
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
@@ -39,6 +39,8 @@ mod signals;
 mod ui;
 
 const APP_NAME: &str = "vimcord";
+const VIM_FLAG: &str = "--vim";
+const LOGS_FOLDER: &str = "logs";
 
 const DISCORD_BASE_URL: &str = "https://discord.com/api/v10";
 
@@ -50,8 +52,9 @@ pub enum KeywordAction {
     Break,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub enum Window {
+    #[default]
     Home,
     Guild,
     DM,
@@ -59,8 +62,9 @@ pub enum Window {
     Chat(Box<AnyChannel>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub enum AppState {
+    #[default]
     Home,
     SelectingGuild,
     SelectingDM,
@@ -123,203 +127,193 @@ pub enum AppAction {
     ClearLogs,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub enum InputMode {
+    #[default]
     Normal,
     Insert,
     Command,
     Search,
+    Visual,
+    VisualLine,
 }
 
-#[derive(Debug)]
-pub struct App {
-    api_client: ApiClient,
-    gateway_client: GatewayClient,
-    state: AppState,
-    guilds: Vec<PartialGuild>,
-    selected_guild: Option<Guild>,
-    guild_members: Vec<GuildMember>,
+#[derive(Default, Debug)]
+struct Client {
+    api: ApiClient,
+    gateway: GatewayClient,
+}
+
+impl Client {
+    pub fn new(api: ApiClient, gateway: GatewayClient) -> Self {
+        Self { api, gateway }
+    }
+}
+
+#[derive(Default, Debug)]
+struct GuildData {
+    selected: Option<Guild>,
+    members: Vec<GuildMember>,
     channels: Vec<Channel>,
     messages: Vec<Message>,
     custom_emojis: Vec<Emoji>,
-    dms: Vec<DM>,
-    input: String,
-    saved_input: Option<String>,
-    search_input: String,
-    selection_index: usize,
-    status_message: String,
-    terminal_height: usize,
-    terminal_width: usize,
-    emoji_map: Vec<(String, String)>,
-    emoji_filter: String,
-    emoji_index: usize,
-    /// Byte position where the emoji filter started (position of the ':')
-    emoji_filter_start: Option<usize>,
-    chat_scroll_offset: usize,
-    tick_count: usize,
-    context: Option<PermissionContext>,
-    mode: InputMode,
-    cursor_position: usize,
-    vim_mode: bool,
-    vim_state: Option<VimState>,
-    current_user: Option<User>,
-    pub last_message_ids: HashMap<String, String>,
-    pub discreet_notifs: bool,
-    deleted_message_ids: HashSet<String>,
-    last_typing_sent: Option<std::time::Instant>,
-    typing_users: HashMap<String, HashMap<String, std::time::Instant>>, // channel_id -> user_id -> timestamp
+
+    joined: Vec<PartialGuild>,
+}
+
+#[derive(Default, Debug)]
+struct DMData {
+    channels: Vec<DM>,
     user_names: HashMap<String, String>,
     user_statuses: HashMap<String, String>, // user id -> status string (online, offline, etc.)
     user_status_texts: HashMap<String, String>, // user id -> custom status text
-    silent_typing: bool,
-    is_loading: bool,
-    #[cfg(not(target_os = "windows"))]
-    pub active_notifications: HashMap<String, Vec<notify_rust::NotificationHandle>>,
-    pub notifs_display_username: bool,
-    display_username: bool,
-    logs: Vec<String>,
-    log_reader: LogReader,
 }
 
-pub struct Setup {
-    api_client: ApiClient,
-    gateway_client: GatewayClient,
-    emoji_map: Vec<(String, String)>,
-    vim_mode: bool,
-    vim_state: Option<VimState>,
-    discreet_notifs: bool,
-    notifs_display_username: bool,
-    silent_typing: bool,
-    display_username: bool,
-    log_reader: LogReader,
+#[derive(Default, Debug)]
+struct EmojiData {
+    map: Vec<(String, String)>,
+    filter: String,
+    index: usize,
+    /// Byte position where the emoji filter started (position of the ':')
+    filter_start: Option<usize>,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl EmojiData {
+    pub fn new(map: Vec<(String, String)>) -> Self {
         Self {
-            api_client: ApiClient::new(Client::new(), String::new(), DISCORD_BASE_URL.to_string()),
-            gateway_client: GatewayClient::default(),
-            state: AppState::Loading(Window::Home),
-            guilds: Vec::new(),
-            selected_guild: None,
-            guild_members: Vec::new(),
-            channels: Vec::new(),
-            messages: Vec::new(),
-            custom_emojis: Vec::new(),
-            dms: Vec::new(),
-            input: String::new(),
-            saved_input: None,
-            search_input: String::new(),
-            selection_index: 0,
-            status_message: String::new(),
-            terminal_height: 20,
-            terminal_width: 80,
-            emoji_map: Vec::new(),
-            emoji_filter: String::new(),
-            emoji_filter_start: None,
-            emoji_index: 0,
-            chat_scroll_offset: 0,
-            tick_count: 0,
-            context: None,
-            mode: InputMode::Normal,
-            cursor_position: 0,
-            vim_mode: true,
-            vim_state: Some(VimState::default()),
-            current_user: None,
-            last_message_ids: HashMap::new(),
-            discreet_notifs: false,
-            deleted_message_ids: HashSet::new(),
-            last_typing_sent: None,
-            typing_users: HashMap::new(),
-            user_names: HashMap::new(),
-            user_statuses: HashMap::new(),
-            user_status_texts: HashMap::new(),
-            silent_typing: false,
-            is_loading: false,
-            #[cfg(not(target_os = "windows"))]
-            active_notifications: HashMap::new(),
-            notifs_display_username: false,
-            display_username: false,
-            logs: Vec::new(),
-            log_reader: LogReader::default(),
+            map,
+            ..Default::default()
         }
     }
 }
 
-impl App {
-    pub fn setup(values: Setup) -> Self {
-        let (
-            api_client,
-            gateway_client,
-            emoji_map,
-            vim_mode,
-            vim_state,
-            discreet_notifs,
-            notifs_display_username,
-            silent_typing,
-            display_username,
-            log_reader,
-        ) = (
-            values.api_client,
-            values.gateway_client,
-            values.emoji_map,
-            values.vim_mode,
-            values.vim_state,
-            values.discreet_notifs,
-            values.notifs_display_username,
-            values.silent_typing,
-            values.display_username,
-            values.log_reader,
-        );
+#[derive(Default, Debug)]
+struct InputData {
+    buffer: String,
+    saved: Option<String>,
+    search: String,
+    mode: InputMode,
+}
+
+#[derive(Default, Debug)]
+struct VimData {
+    active: bool,
+    state: Option<VimState>,
+}
+
+impl VimData {
+    pub fn new(vim_mode: bool) -> Self {
+        let vim_mode = vim_mode || env::args().any(|arg| arg == VIM_FLAG);
+        let vim_state = if vim_mode {
+            Some(VimState::default())
+        } else {
+            None
+        };
 
         Self {
-            api_client,
-            gateway_client,
-            state: AppState::Loading(Window::Home),
-            guilds: Vec::new(),
-            selected_guild: None,
-            guild_members: Vec::new(),
-            channels: Vec::new(),
-            messages: Vec::new(),
-            custom_emojis: Vec::new(),
-            dms: Vec::new(),
-            input: String::new(),
-            saved_input: None,
-            search_input: String::new(),
-            selection_index: 0,
-            status_message:
-                "Browse either DMs or Servers. Use arrows to navigate, Enter to select & Esc to quit"
-                    .to_string(),
-            terminal_height: 20,
-            terminal_width: 80,
-            emoji_map,
-            emoji_filter: String::new(),
-            emoji_filter_start: None,
-            emoji_index: 0,
-            chat_scroll_offset: 0,
-            tick_count: 0,
-            context: None,
-            mode: InputMode::Normal,
-            cursor_position: 0,
-            vim_mode,
-            vim_state,
-            current_user: None,
-            last_message_ids: HashMap::new(),
-            discreet_notifs,
-            deleted_message_ids: HashSet::new(),
-            last_typing_sent: None,
-            typing_users: HashMap::new(),
-            user_names: HashMap::new(),
-            user_statuses: HashMap::new(),
-            user_status_texts: HashMap::new(),
+            active: vim_mode,
+            state: vim_state,
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+struct NotifsData {
+    pub last_message_ids: HashMap<String, String>,
+    pub discreet: bool,
+    #[cfg(not(target_os = "windows"))]
+    pub active: HashMap<String, Vec<notify_rust::NotificationHandle>>,
+    pub is_invisible_dnd: bool,
+}
+
+impl NotifsData {
+    pub fn new(discreet: bool) -> Self {
+        Self {
+            discreet,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+struct TypingData {
+    last_typing_sent: Option<std::time::Instant>,
+    typing_users: HashMap<String, HashMap<String, std::time::Instant>>, // channel_id -> user_id -> timestamp
+    silent_typing: bool,
+}
+
+impl TypingData {
+    pub fn new(silent_typing: bool) -> Self {
+        Self {
             silent_typing,
-            is_loading: false,
-            #[cfg(not(target_os = "windows"))]
-            active_notifications: HashMap::new(),
-            notifs_display_username,
-            display_username,
-            logs: Vec::new(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+struct Data {
+    current_user: Option<User>,
+    guilds: GuildData,
+    dms: DMData,
+    emojis: EmojiData,
+
+    input: InputData,
+    status_message: String,
+    terminal_dimensions: (usize, usize),
+
+    selection_index: usize,
+    scroll_offset: usize,
+    cursor_position: usize,
+
+    context: Option<PermissionContext>,
+    vim: VimData,
+    notifs: NotifsData,
+    typing: TypingData,
+
+    display_username: bool,
+    logs: Vec<String>,
+    log_reader: LogReader,
+    deleted_message_ids: HashSet<String>,
+}
+
+impl Data {
+    pub fn new(
+        emojis: EmojiData,
+        vim: VimData,
+        notifs: NotifsData,
+        typing: TypingData,
+        log_reader: LogReader,
+        display_username: bool,
+    ) -> Self {
+        Self {
+            emojis,
+            vim,
+            notifs,
+            typing,
             log_reader,
+            display_username,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+struct App {
+    client: Client,
+    state: AppState,
+    data: Data,
+
+    tick_count: usize,
+    is_loading: bool,
+}
+
+impl App {
+    pub fn new(client: Client, data: Data) -> Self {
+        Self {
+            client,
+            data,
+            ..Default::default()
         }
     }
 }
@@ -331,23 +325,12 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let vim_mode = config.vim_mode || env::args().any(|arg| arg == "--vim");
-    let vim_state = if vim_mode {
-        Some(VimState::default())
-    } else {
-        None
-    };
-
     let (tx_action, mut rx_action) = mpsc::channel::<AppAction>(32);
     let (tx_shutdown, _) = tokio::sync::broadcast::channel::<()>(1);
 
-    let gateway_token = token.clone();
-    let gateway_tx = tx_action.clone();
-    let gateway_client = GatewayClient::new(gateway_token, gateway_tx);
-
     let mut path = get_log_directory(APP_NAME).unwrap_or(".".into());
     let _ = std::fs::create_dir_all(&path);
-    path.push("logs");
+    path.push(LOGS_FOLDER);
 
     let log_reader = match LogReader::new(path.clone()) {
         Ok(lg) => lg,
@@ -362,18 +345,23 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
         }
     };
 
-    let app_state = Arc::new(Mutex::new(App::setup(Setup {
-        api_client: ApiClient::new(Client::new(), token.clone(), DISCORD_BASE_URL.to_string()),
-        gateway_client,
-        emoji_map: config.emoji_map,
-        vim_mode,
-        vim_state,
-        discreet_notifs: config.discreet_notifs,
-        notifs_display_username: config.notifs_display_username,
-        silent_typing: config.silent_typing,
-        display_username: config.display_username,
+    let client = Client::new(
+        ApiClient::new(
+            ReqwestClient::new(),
+            token.clone(),
+            DISCORD_BASE_URL.to_string(),
+        ),
+        GatewayClient::new(token.clone(), tx_action.clone()),
+    );
+    let data = Data::new(
+        EmojiData::new(config.emoji_map),
+        VimData::new(config.vim_mode),
+        NotifsData::new(config.discreet_notifs),
+        TypingData::new(config.silent_typing),
         log_reader,
-    })));
+        config.display_username,
+    );
+    let app_state = Arc::new(Mutex::new(App::new(client, data)));
 
     let tx_ticker = tx_action.clone();
     let mut rx_shutdown_ticker = tx_shutdown.subscribe();
@@ -432,7 +420,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
 
     let rx_shutdown_gateway = tx_shutdown.subscribe();
 
-    let client = api_state.lock().await.gateway_client.clone();
+    let client = api_state.lock().await.client.gateway.clone();
     let gateway_handle: JoinHandle<()> = tokio::spawn(async move {
         if let Err(e) = client.connect(rx_shutdown_gateway).await {
             print_log(
@@ -448,7 +436,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
         let api_client_clone;
         {
             let state = api_state.lock().await;
-            api_client_clone = state.api_client.clone();
+            api_client_clone = state.client.api.clone();
         }
 
         match api_client_clone.get_current_user().await {
@@ -464,7 +452,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
             }
             Err(e) => {
                 let mut state = api_state.lock().await;
-                state.status_message = format!("Failed to load current user. {e}");
+                state.data.status_message = format!("Failed to load current user. {e}");
             }
         }
 
@@ -487,7 +475,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
                 )
                 .await
                 .ok();
-                state.status_message = format!("Failed to load servers. {e}");
+                state.data.status_message = format!("Failed to load servers. {e}");
             }
         }
 
@@ -504,7 +492,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
             }
             Err(e) => {
                 let mut state = api_state.lock().await;
-                state.status_message = format!("Failed to load DMs. {e}");
+                state.data.status_message = format!("Failed to load DMs. {e}");
             }
         }
 
@@ -523,11 +511,11 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
                 })
                 .unwrap();
 
-            if !state_guard.vim_mode {
+            if !state_guard.data.vim.active {
                 execute!(io::stdout(), SetCursorStyle::BlinkingBar).ok();
             } else {
-                match state_guard.mode {
-                    InputMode::Normal => {
+                match state_guard.data.input.mode {
+                    InputMode::Normal | InputMode::Visual | InputMode::VisualLine => {
                         execute!(io::stdout(), SetCursorStyle::BlinkingBlock).ok();
                     }
                     InputMode::Insert | InputMode::Command | InputMode::Search => {

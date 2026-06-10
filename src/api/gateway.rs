@@ -394,6 +394,7 @@ impl GatewayClient {
                     .await
                     .ok();
             }
+            "USER_SETTINGS_PROTO_UPDATE" | "READY" => {}
             e => {
                 print_log(
                     format!("Unhandled event received: {e}").into(),
@@ -444,6 +445,42 @@ impl GatewayClient {
         if let Err(e) = self.outbound_tx.send(request).await {
             print_log(
                 format!("Error subscribing to a channel: {e}").into(),
+                LogType::Error,
+            )
+            .await
+            .ok();
+        }
+
+        Ok(())
+    }
+
+    pub async fn update_presence(
+        &self,
+        status: &str,
+        custom_status: Option<&str>,
+    ) -> Result<(), Error> {
+        let mut activities = vec![];
+        if let Some(text) = custom_status {
+            activities.push(serde_json::json!({
+                "type": 4,
+                "name": "Custom Status",
+                "state": text
+            }));
+        }
+
+        let request = serde_json::json!({
+            "op": 3,
+            "d": {
+                "status": status,
+                "since": 0,
+                "activities": activities,
+                "afk": false,
+            }
+        });
+
+        if let Err(e) = self.outbound_tx.send(request).await {
+            print_log(
+                format!("Error updating presence via gateway: {e}").into(),
                 LogType::Error,
             )
             .await

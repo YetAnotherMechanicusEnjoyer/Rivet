@@ -6,7 +6,7 @@ use tokio::{
     time::{self, Duration},
 };
 
-use std::path::PathBuf;
+use std::{fmt::Display, path::PathBuf};
 
 pub enum LogType {
     Error,
@@ -14,6 +14,18 @@ pub enum LogType {
     Warning,
     Info,
     Debug,
+}
+
+impl Display for LogType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let desc = match *self {
+            LogType::Error => "ERROR",
+            LogType::Warning => "WARN",
+            LogType::Info => "INFO",
+            LogType::Debug => "DEBUG",
+        };
+        f.write_str(desc)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -128,13 +140,7 @@ async fn write_log_file(path: PathBuf, msg: &[u8]) -> Result<(), Error> {
 
 pub async fn print_log(msg: Error, log_type: LogType) -> Result<(), Error> {
     let timestamp = chrono::offset::Local::now();
-    let type_str = match log_type {
-        LogType::Error => "ERROR",
-        LogType::Warning => "WARN",
-        LogType::Info => "INFO",
-        LogType::Debug => "DEBUG",
-    };
-    let msg = format!("[{timestamp}] {type_str}: {msg}\n");
+    let msg = format!("[{timestamp}] {log_type}: {msg}\n");
     let mut path = get_log_directory(APP_NAME).unwrap_or(".".into());
     let _ = std::fs::create_dir_all(&path);
     path.push("logs");

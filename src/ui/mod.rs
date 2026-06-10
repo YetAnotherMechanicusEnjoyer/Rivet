@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod draw;
 pub mod events;
 pub mod vim;

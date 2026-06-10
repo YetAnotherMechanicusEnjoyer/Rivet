@@ -36,10 +36,15 @@ When Vim mode is enabled, typing text is done in **Insert Mode** while navigatio
 | `k` | Move cursor up (or select previous message in chat) |
 | `w` | Move cursor forward to the next word |
 | `b` | Move cursor backward to the previous word |
-| `x` | Delete the character under the cursor |
+| `v` | Enter Visual mode for text selection |
+| `V` | Enter Visual Line mode for selecting entire lines |
+| `y` | Yank (copy) the current selection; `yy` yanks current line |
+| `p` / `P` | Paste the yanked text (after/before cursor, or line-wise) |
+| `x` | Delete the character under the cursor (or selection in Visual mode) |
 | `dw` | Delete the word in front of the cursor |
 | `db` | Delete the word before the cursor |
 | `dd` | Delete the current line (or delete the selected message if you authored it) |
+| `d` | Delete the selected text (in Visual mode) |
 | `gg` | Move cursor to the start of selection |
 | `G` | Move cursor to the end of input (or clear message selection) |
 

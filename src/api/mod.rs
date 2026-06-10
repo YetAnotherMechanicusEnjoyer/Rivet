@@ -65,7 +65,7 @@ impl AnyChannel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ApiClient {
     pub http_client: Client,
     pub auth_token: String,

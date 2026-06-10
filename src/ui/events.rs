@@ -19,47 +19,53 @@ fn insert_char_at_cursor(state: &mut MutexGuard<'_, App>, tx_action: Sender<AppA
     let current_state = state.state.clone();
     match current_state {
         AppState::EmojiSelection(channel) => {
-            let pos = state.cursor_position;
-            state.input.insert(pos, c);
-            state.cursor_position += c.len_utf8();
+            let pos = state.data.cursor_position;
+            state.data.input.buffer.insert(pos, c);
+            state.data.cursor_position += c.len_utf8();
             if c == ' ' {
                 #[allow(unused)]
                 tx_action.send(AppAction::TransitionToChat(channel));
-                state.emoji_filter.clear();
-                state.emoji_filter_start = None;
+                state.data.emojis.filter.clear();
+                state.data.emojis.filter_start = None;
             } else {
                 // Recompute emoji_filter based on the current input and emoji_filter_start.
-                if let Some(start) = state.emoji_filter_start {
+                if let Some(start) = state.data.emojis.filter_start {
                     let filter_start = start + ':'.len_utf8();
-                    if state.cursor_position <= start || filter_start > state.input.len() {
-                        state.emoji_filter.clear();
+                    if state.data.cursor_position <= start
+                        || filter_start > state.data.input.buffer.len()
+                    {
+                        state.data.emojis.filter.clear();
                     } else {
-                        let end = std::cmp::min(state.cursor_position, state.input.len());
+                        let end = std::cmp::min(
+                            state.data.cursor_position,
+                            state.data.input.buffer.len(),
+                        );
                         if filter_start <= end {
-                            state.emoji_filter = state.input[filter_start..end].to_string();
+                            state.data.emojis.filter =
+                                state.data.input.buffer[filter_start..end].to_string();
                         } else {
-                            state.emoji_filter.clear();
+                            state.data.emojis.filter.clear();
                         }
                     }
                 } else {
-                    state.emoji_filter.clear();
+                    state.data.emojis.filter.clear();
                 }
 
-                if state.emoji_filter.is_empty() {
+                if state.data.emojis.filter.is_empty() {
                     #[allow(unused)]
                     tx_action.send(AppAction::TransitionToChat(channel));
-                    state.emoji_filter_start = None;
-                    state.status_message =
+                    state.data.emojis.filter_start = None;
+                    state.data.status_message =
                         "Chatting in channel. Press Enter to send message. Esc to return channels"
                             .to_string();
                 }
             }
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         _ => {
-            let pos = state.cursor_position;
-            state.input.insert(pos, c);
-            state.cursor_position += c.len_utf8();
+            let pos = state.data.cursor_position;
+            state.data.input.buffer.insert(pos, c);
+            state.data.cursor_position += c.len_utf8();
         }
     }
 }
@@ -77,41 +83,39 @@ pub async fn handle_input_events(
             _ = time::sleep(Duration::from_millis(10)) => {
                 if event::poll(Duration::from_millis(0))? {
                     match event::read()? {
-                        event::Event::Key(key) => {
-                            if key.kind == KeyEventKind::Press {
-                                if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                    tx.send(AppAction::SigInt).await.ok();
-                                } else {
-                                    match key.code {
-                                        KeyCode::Esc => {
-                                            tx.send(AppAction::InputEscape).await.ok();
-                                        }
-                                        KeyCode::Enter => {
-                                            tx.send(AppAction::InputSubmit).await.ok();
-                                        }
-                                        KeyCode::Backspace => {
-                                            tx.send(AppAction::InputBackspace).await.ok();
-                                        }
-                                        KeyCode::Delete => {
-                                            tx.send(AppAction::InputDelete).await.ok();
-                                        }
-                                        KeyCode::Up => {
-                                            tx.send(AppAction::SelectPrevious).await.ok();
-                                        }
-                                        KeyCode::Down => {
-                                            tx.send(AppAction::SelectNext).await.ok();
-                                        }
-                                        KeyCode::Left => {
-                                            tx.send(AppAction::SelectLeft).await.ok();
-                                        }
-                                        KeyCode::Right => {
-                                            tx.send(AppAction::SelectRight).await.ok();
-                                        }
-                                        KeyCode::Char(c) => {
-                                            tx.send(AppAction::InputChar(c)).await.ok();
-                                        }
-                                        _ => {}
+                        event::Event::Key(key) if key.kind == KeyEventKind::Press => {
+                            if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                tx.send(AppAction::SigInt).await.ok();
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        tx.send(AppAction::InputEscape).await.ok();
                                     }
+                                    KeyCode::Enter => {
+                                        tx.send(AppAction::InputSubmit).await.ok();
+                                    }
+                                    KeyCode::Backspace => {
+                                        tx.send(AppAction::InputBackspace).await.ok();
+                                    }
+                                    KeyCode::Delete => {
+                                        tx.send(AppAction::InputDelete).await.ok();
+                                    }
+                                    KeyCode::Up => {
+                                        tx.send(AppAction::SelectPrevious).await.ok();
+                                    }
+                                    KeyCode::Down => {
+                                        tx.send(AppAction::SelectNext).await.ok();
+                                    }
+                                    KeyCode::Left => {
+                                        tx.send(AppAction::SelectLeft).await.ok();
+                                    }
+                                    KeyCode::Right => {
+                                        tx.send(AppAction::SelectRight).await.ok();
+                                    }
+                                    KeyCode::Char(c) => {
+                                        tx.send(AppAction::InputChar(c)).await.ok();
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -133,87 +137,51 @@ async fn input_submit(
     filtered_custom: Vec<&Emoji>,
     total_filtered_emojis: usize,
 ) -> Option<KeywordAction> {
-    if state.vim_mode && (state.mode == InputMode::Command || state.mode == InputMode::Search) {
-        let input = state.input.clone();
+    if state.data.vim.active
+        && (state.data.input.mode == InputMode::Command
+            || state.data.input.mode == InputMode::Search)
+    {
+        let input = state.data.input.buffer.clone();
 
-        state.input = state.saved_input.clone().unwrap_or_default();
-        state.saved_input = None;
-        let pos = if state.cursor_position <= state.input.len() && state.cursor_position > 0 {
-            state.cursor_position
+        state.data.input.buffer = state.data.input.saved.clone().unwrap_or_default();
+        state.data.input.saved = None;
+        let pos = if state.data.cursor_position <= state.data.input.buffer.len()
+            && state.data.cursor_position > 0
+        {
+            state.data.cursor_position
         } else {
-            state.input.len()
+            state.data.input.buffer.len()
         };
-        if let Some(c) = state.input[..pos].chars().next_back()
+        if let Some(c) = state.data.input.buffer[..pos].chars().next_back()
             && c != '\n'
         {
-            state.cursor_position = state.cursor_position.saturating_sub(c.len_utf8());
+            state.data.cursor_position = state.data.cursor_position.saturating_sub(c.len_utf8());
         }
-        if !(state.cursor_position == state.input.len() && state.input.ends_with('\n')) {
+        if !(state.data.cursor_position == state.data.input.buffer.len()
+            && state.data.input.buffer.ends_with('\n'))
+        {
             vim::clamp_cursor(state);
         }
 
-        match &state.mode {
+        match &state.data.input.mode {
             InputMode::Command => {
-                let (cmd, args) = {
-                    let mut s = input.split(' ');
-                    (
-                        s.next().unwrap_or_default().to_lowercase(),
-                        s.map(|s| s.to_string()).collect::<Vec<String>>(),
-                    )
-                };
-
-                match cmd.as_str() {
-                    "quit" | "q" => {
-                        return Some(KeywordAction::Break);
-                    }
-                    "debug" => {
-                        print_log(args.join(" ").as_str().into(), LogType::Debug)
-                            .await
-                            .ok();
-                    }
-                    "logs" => {
-                        tx_action.send(AppAction::TransitionToLogs).await.ok();
-                    }
-                    "status" => {
-                        if let (Some(status), Some(status_text)) = (args.first(), args.get(1)) {
-                            if let Err(e) = state
-                                .api_client
-                                .modify_user_settings(serde_json::json!({
-                                    "custom_status": {
-                                        "text": status_text,
-                                        //"emoji_name": emoji.name,
-                                        //"emoji_id": emoji.id,
-                                        //"expires_at": never (for now)
-                                    },
-                                    "status": status,
-                                }))
-                                .await
-                            {
-                                print_log(
-                                    format!("Failed to change status: {e}").into(),
-                                    LogType::Error,
-                                )
-                                .await
-                                .ok();
-                            }
-                        } else {
-                            print_log(format!("Failed to change status: Bad usage: \"status <online|dnd|idle|invisible|offline> <text>\": {args:?}").into(), LogType::Error).await.ok();
-                        }
-                    }
-                    _ => {}
+                if let Some(action) =
+                    crate::ui::commands::handle_command(state, tx_action, input).await
+                {
+                    return Some(action);
                 }
             }
             InputMode::Search => {
-                state.search_input = input;
+                state.data.input.search = input;
             }
             _ => {}
         }
-        state.mode = InputMode::Normal;
+        state.data.input.mode = InputMode::Normal;
         return None;
     }
     match state.state.clone() {
         AppState::Loading(_) | AppState::Logs(_) => {}
-        AppState::Home => match state.selection_index {
+        AppState::Home => match state.data.selection_index {
             0 => {
                 tx_action.send(AppAction::TransitionToGuilds).await.ok();
             }
@@ -226,9 +194,11 @@ async fn input_submit(
             _ => {}
         },
         AppState::SelectingDM => {
-            let filter_text = state.search_input.to_lowercase();
+            let filter_text = state.data.input.search.to_lowercase();
             let dms: Vec<&DM> = state
+                .data
                 .dms
+                .channels
                 .iter()
                 .filter(|d| d.get_name().to_lowercase().contains(&filter_text))
                 .collect();
@@ -237,18 +207,18 @@ async fn input_submit(
                 return Some(KeywordAction::Continue);
             }
 
-            let selected_dm = dms[state.selection_index].clone();
+            let selected_dm = dms[state.data.selection_index].clone();
             let selected_dm_name = if selected_dm.recipients.is_empty() {
                 "Empty".to_string()
             } else {
                 selected_dm.recipients[0].username.clone()
             };
 
-            state.cursor_position = 0;
-            state.status_message = format!("Loading messages for {selected_dm_name}...");
+            state.data.cursor_position = 0;
+            state.data.status_message = format!("Loading messages for {selected_dm_name}...");
 
             let tx_action_clone = tx_action.clone();
-            let api_client_clone = state.api_client.clone();
+            let api_client_clone = state.client.api.clone();
             let channel_load = selected_dm.clone();
 
             tokio::spawn(async move {
@@ -290,9 +260,11 @@ async fn input_submit(
             });
         }
         AppState::SelectingGuild => {
-            let filter_text = state.search_input.to_lowercase();
+            let filter_text = state.data.input.search.to_lowercase();
             let guilds: Vec<&PartialGuild> = state
+                .data
                 .guilds
+                .joined
                 .iter()
                 .filter(|g| g.name.to_lowercase().contains(&filter_text))
                 .collect();
@@ -301,11 +273,12 @@ async fn input_submit(
                 return Some(KeywordAction::Continue);
             }
 
-            let selected_partial_guild = guilds[state.selection_index].clone();
+            let selected_partial_guild = guilds[state.data.selection_index].clone();
             let selected_guild_name = selected_partial_guild.name.clone();
 
             let selected_guild = match state
-                .api_client
+                .client
+                .api
                 .get_guild(selected_partial_guild.id.as_str())
                 .await
             {
@@ -318,7 +291,8 @@ async fn input_submit(
             };
 
             if let Err(e) = state
-                .gateway_client
+                .client
+                .gateway
                 .request_guild_members(selected_partial_guild.id.as_str())
                 .await
             {
@@ -330,13 +304,13 @@ async fn input_submit(
                 .ok();
             }
 
-            state.selected_guild = Some(selected_guild.clone());
+            state.data.guilds.selected = Some(selected_guild.clone());
 
             let tx_clone = tx_action.clone();
 
-            state.status_message = format!("Loading channels for {selected_guild_name}...");
+            state.data.status_message = format!("Loading channels for {selected_guild_name}...");
 
-            let api_client_clone = state.api_client.clone();
+            let api_client_clone = state.client.api.clone();
 
             tokio::spawn(async move {
                 tx_clone
@@ -404,10 +378,10 @@ async fn input_submit(
             });
         }
         AppState::SelectingChannel(g) => {
-            let permission_context = &state.context;
+            let permission_context = &state.data.context;
             let mut text_channels: Vec<&Channel> = Vec::new();
 
-            let filter_text = state.search_input.to_lowercase();
+            let filter_text = state.data.input.search.to_lowercase();
             let should_display_channel_content = |c: &Channel| {
                 let is_readable = permission_context
                     .as_ref()
@@ -418,6 +392,8 @@ async fn input_submit(
             };
 
             state
+                .data
+                .guilds
                 .channels
                 .iter()
                 .filter(|c| {
@@ -451,13 +427,13 @@ async fn input_submit(
                 });
 
             if text_channels.is_empty()
-                || text_channels.len() <= state.selection_index
-                || text_channels[state.selection_index].channel_type == 4
+                || text_channels.len() <= state.data.selection_index
+                || text_channels[state.data.selection_index].channel_type == 4
             {
                 return Some(KeywordAction::Continue);
             }
 
-            let selected_channel = text_channels[state.selection_index].clone();
+            let selected_channel = text_channels[state.data.selection_index].clone();
 
             tx_action
                 .send(AppAction::TransitionToLoading(Window::Chat(Box::new(
@@ -467,7 +443,8 @@ async fn input_submit(
                 .ok();
 
             if let Err(e) = state
-                .gateway_client
+                .client
+                .gateway
                 .subscribe_channel(&g.id, &selected_channel.id)
                 .await
             {
@@ -479,12 +456,14 @@ async fn input_submit(
                 .ok();
             }
 
-            state.input = String::new();
-            state.cursor_position = 0;
-            state.status_message = format!("Loading messages for {}...", selected_channel.name);
+            state.data.input.buffer = String::new();
+            state.data.cursor_position = 0;
+            state.data.status_message =
+                format!("Loading messages for {}...", selected_channel.name);
 
             match state
-                .api_client
+                .client
+                .api
                 .get_channel_messages(
                     selected_channel.id.clone().as_str(),
                     None,
@@ -512,32 +491,33 @@ async fn input_submit(
                     }
                 }
                 Err(e) => {
-                    state.status_message = format!("Error loading chat: {e}");
+                    state.data.status_message = format!("Error loading chat: {e}");
                 }
             }
 
             tx_action.send(AppAction::EndLoading).await.ok();
         }
         AppState::EmojiSelection(channel) => {
-            let start_pos = state.emoji_filter_start?;
-            let end_pos = start_pos + ':'.len_utf8() + state.emoji_filter.len();
+            let start_pos = state.data.emojis.filter_start?;
+            let end_pos = start_pos + ':'.len_utf8() + state.data.emojis.filter.len();
 
-            if state.selection_index < filtered_unicode.len() {
-                let (_, char) = filtered_unicode[state.selection_index];
+            if state.data.selection_index < filtered_unicode.len() {
+                let (_, char) = filtered_unicode[state.data.selection_index];
 
-                if state.input.is_char_boundary(start_pos) && state.input.is_char_boundary(end_pos)
+                if state.data.input.buffer.is_char_boundary(start_pos)
+                    && state.data.input.buffer.is_char_boundary(end_pos)
                 {
-                    state.input.drain(start_pos..end_pos);
+                    state.data.input.buffer.drain(start_pos..end_pos);
 
-                    state.input.insert_str(start_pos, char);
+                    state.data.input.buffer.insert_str(start_pos, char);
                     let mut pos = start_pos + char.len();
-                    state.input.insert(pos, ' ');
+                    state.data.input.buffer.insert(pos, ' ');
                     pos += ' '.len_utf8();
 
-                    state.cursor_position = pos;
+                    state.data.cursor_position = pos;
                 }
-            } else if state.selection_index < total_filtered_emojis {
-                let custom_index = state.selection_index - filtered_unicode.len();
+            } else if state.data.selection_index < total_filtered_emojis {
+                let custom_index = state.data.selection_index - filtered_unicode.len();
                 let emoji = filtered_custom[custom_index];
 
                 let emoji_string = format!(
@@ -551,31 +531,32 @@ async fn input_submit(
                     emoji.id
                 );
 
-                if state.input.is_char_boundary(start_pos) && state.input.is_char_boundary(end_pos)
+                if state.data.input.buffer.is_char_boundary(start_pos)
+                    && state.data.input.buffer.is_char_boundary(end_pos)
                 {
-                    state.input.drain(start_pos..end_pos);
+                    state.data.input.buffer.drain(start_pos..end_pos);
 
-                    state.input.insert_str(start_pos, &emoji_string);
+                    state.data.input.buffer.insert_str(start_pos, &emoji_string);
                     let mut pos = start_pos + emoji_string.len();
-                    state.input.insert(pos, ' ');
+                    state.data.input.buffer.insert(pos, ' ');
                     pos += ' '.len_utf8();
 
-                    state.cursor_position = pos;
+                    state.data.cursor_position = pos;
                 }
             }
 
             state.state = AppState::Chatting(channel.clone());
-            state.emoji_filter.clear();
-            state.emoji_filter_start = None;
-            state.emoji_index = 0;
-            state.status_message =
+            state.data.emojis.filter.clear();
+            state.data.emojis.filter_start = None;
+            state.data.emojis.index = 0;
+            state.data.status_message =
                 "Chatting in channel. Press Enter to send message, Esc to return to channels."
                     .to_string();
         }
         AppState::Editing(channel, message, _) => {
             let (channel_id_clone, message_id_clone) =
                 (channel.get_id().clone(), message.id.clone());
-            let content = state.input.drain(..).collect::<String>();
+            let content = state.data.input.buffer.drain(..).collect::<String>();
 
             let message_data = if content.is_empty() {
                 None
@@ -586,8 +567,8 @@ async fn input_submit(
             let tx_action_clone = tx_action.clone();
 
             if let Some((channel_id_clone, content)) = message_data {
-                let api_client_clone = state.api_client.clone();
-                let msgs = state.messages.clone();
+                let api_client_clone = state.client.api.clone();
+                let msgs = state.data.guilds.messages.clone();
 
                 tokio::spawn(async move {
                     match api_client_clone
@@ -626,8 +607,8 @@ async fn input_submit(
         AppState::Chatting(channel) => {
             let channel_id_clone = channel.get_id().clone();
 
-            let content = state.input.drain(..).collect::<String>();
-            state.cursor_position = 0;
+            let content = state.data.input.buffer.drain(..).collect::<String>();
+            state.data.cursor_position = 0;
 
             let message_data = if content.is_empty() || channel_id_clone.is_empty() {
                 None
@@ -636,7 +617,7 @@ async fn input_submit(
             };
 
             if let Some((channel_id_clone, content)) = message_data {
-                let api_client_clone = state.api_client.clone();
+                let api_client_clone = state.client.api.clone();
 
                 let mut members = std::collections::HashSet::new();
                 let tmp = content.clone();
@@ -664,7 +645,9 @@ async fn input_submit(
                     std::collections::HashMap::new();
                 for member in members {
                     if let Some(guild_member) = state
-                        .guild_members
+                        .data
+                        .guilds
+                        .members
                         .iter()
                         .find(|gm| gm.user.username == member)
                     {
@@ -702,114 +685,112 @@ async fn move_selection(state: &mut MutexGuard<'_, App>, n: i32, total_filtered_
     match state.state {
         AppState::Home => {
             if n < 0 {
-                state.selection_index = if state.selection_index == 0 {
+                state.data.selection_index = if state.data.selection_index == 0 {
                     3 - n.unsigned_abs() as usize
                 } else {
-                    state.selection_index - n.unsigned_abs() as usize
+                    state.data.selection_index - n.unsigned_abs() as usize
                 };
             } else {
-                state.selection_index = (state.selection_index + n.unsigned_abs() as usize) % 3;
+                state.data.selection_index =
+                    (state.data.selection_index + n.unsigned_abs() as usize) % 3;
             }
         }
-        AppState::SelectingDM => {
-            if !state.dms.is_empty() {
-                if n < 0 {
-                    state.selection_index = if state.selection_index == 0 {
-                        state.dms.len() - n.unsigned_abs() as usize
-                    } else {
-                        state.selection_index - n.unsigned_abs() as usize
-                    };
+        AppState::SelectingDM if !state.data.dms.channels.is_empty() => {
+            if n < 0 {
+                state.data.selection_index = if state.data.selection_index == 0 {
+                    state.data.dms.channels.len() - n.unsigned_abs() as usize
                 } else {
-                    state.selection_index =
-                        (state.selection_index + n.unsigned_abs() as usize) % state.dms.len();
-                }
-            }
-        }
-        AppState::SelectingGuild => {
-            if !state.guilds.is_empty() {
-                if n < 0 {
-                    state.selection_index = if state.selection_index == 0 {
-                        state.guilds.len() - n.unsigned_abs() as usize
-                    } else {
-                        state.selection_index - n.unsigned_abs() as usize
-                    };
-                } else {
-                    state.selection_index =
-                        (state.selection_index + n.unsigned_abs() as usize) % state.guilds.len();
-                }
-            }
-        }
-        AppState::SelectingChannel(_) => {
-            if !state.channels.is_empty() {
-                let filter_text = state.search_input.to_lowercase();
-                let permission_context = &state.context;
-
-                let should_display_content = |c: &Channel| {
-                    let is_readable = permission_context
-                        .as_ref()
-                        .is_some_and(|context| c.is_readable(context));
-
-                    is_readable
-                        && (filter_text.is_empty() || c.name.to_lowercase().contains(&filter_text))
+                    state.data.selection_index - n.unsigned_abs() as usize
                 };
-
-                let len: usize = state
-                    .channels
-                    .iter()
-                    .flat_map(|c| {
-                        if c.channel_type == 4 {
-                            let mut list_items_to_render: Vec<&Channel> = Vec::new();
-
-                            let name_matches = filter_text.is_empty()
-                                || c.name.to_lowercase().contains(&filter_text);
-
-                            let child_matches = c.children.as_ref().is_some_and(|children| {
-                                children.iter().any(should_display_content)
-                            });
-
-                            if name_matches || child_matches {
-                                list_items_to_render.push(c);
-
-                                if let Some(children) = &c.children {
-                                    list_items_to_render.extend(
-                                        children
-                                            .iter()
-                                            .filter(|child| should_display_content(child)),
-                                    );
-                                }
-                            }
-                            list_items_to_render
-                        } else if should_display_content(c) {
-                            vec![c]
-                        } else {
-                            vec![]
-                        }
-                    })
-                    .count();
-
-                if n < 0 {
-                    state.selection_index = if state.selection_index == 0 {
-                        len - n.unsigned_abs() as usize
-                    } else {
-                        state.selection_index - n.unsigned_abs() as usize
-                    };
-                } else {
-                    state.selection_index =
-                        (state.selection_index + n.unsigned_abs() as usize) % len;
-                }
+            } else {
+                state.data.selection_index = (state.data.selection_index
+                    + n.unsigned_abs() as usize)
+                    % state.data.dms.channels.len();
             }
         }
-        AppState::EmojiSelection(_) => {
-            if total_filtered_emojis > 0 {
-                if n < 0 {
-                    state.emoji_index = if state.emoji_index == 0 {
-                        total_filtered_emojis - 1
-                    } else {
-                        state.emoji_index - 1
-                    };
+        AppState::SelectingGuild if !state.data.guilds.joined.is_empty() => {
+            if n < 0 {
+                state.data.selection_index = if state.data.selection_index == 0 {
+                    state.data.guilds.joined.len() - n.unsigned_abs() as usize
                 } else {
-                    state.emoji_index = (state.emoji_index + 1) % total_filtered_emojis;
-                }
+                    state.data.selection_index - n.unsigned_abs() as usize
+                };
+            } else {
+                state.data.selection_index = (state.data.selection_index
+                    + n.unsigned_abs() as usize)
+                    % state.data.guilds.joined.len();
+            }
+        }
+        AppState::SelectingChannel(_) if !state.data.guilds.channels.is_empty() => {
+            let filter_text = state.data.input.search.to_lowercase();
+            let permission_context = &state.data.context;
+
+            let should_display_content = |c: &Channel| {
+                let is_readable = permission_context
+                    .as_ref()
+                    .is_some_and(|context| c.is_readable(context));
+
+                is_readable
+                    && (filter_text.is_empty() || c.name.to_lowercase().contains(&filter_text))
+            };
+
+            let len: usize = state
+                .data
+                .guilds
+                .channels
+                .iter()
+                .flat_map(|c| {
+                    if c.channel_type == 4 {
+                        let mut list_items_to_render: Vec<&Channel> = Vec::new();
+
+                        let name_matches =
+                            filter_text.is_empty() || c.name.to_lowercase().contains(&filter_text);
+
+                        let child_matches = c
+                            .children
+                            .as_ref()
+                            .is_some_and(|children| children.iter().any(should_display_content));
+
+                        if name_matches || child_matches {
+                            list_items_to_render.push(c);
+
+                            if let Some(children) = &c.children {
+                                list_items_to_render.extend(
+                                    children
+                                        .iter()
+                                        .filter(|child| should_display_content(child)),
+                                );
+                            }
+                        }
+                        list_items_to_render
+                    } else if should_display_content(c) {
+                        vec![c]
+                    } else {
+                        vec![]
+                    }
+                })
+                .count();
+
+            if n < 0 {
+                state.data.selection_index = if state.data.selection_index == 0 {
+                    len - n.unsigned_abs() as usize
+                } else {
+                    state.data.selection_index - n.unsigned_abs() as usize
+                };
+            } else {
+                state.data.selection_index =
+                    (state.data.selection_index + n.unsigned_abs() as usize) % len;
+            }
+        }
+        AppState::EmojiSelection(_) if total_filtered_emojis > 0 => {
+            if n < 0 {
+                state.data.emojis.index = if state.data.emojis.index == 0 {
+                    total_filtered_emojis - 1
+                } else {
+                    state.data.emojis.index - 1
+                };
+            } else {
+                state.data.emojis.index = (state.data.emojis.index + 1) % total_filtered_emojis;
             }
         }
         _ => {}
@@ -817,17 +798,19 @@ async fn move_selection(state: &mut MutexGuard<'_, App>, n: i32, total_filtered_
 }
 
 fn handle_user_typing(state: &mut App) {
-    if state.silent_typing {
+    if state.data.typing.silent_typing {
         return;
     }
     if let AppState::Chatting(channel) = &state.state {
         let now = std::time::Instant::now();
         let should_send = state
+            .data
+            .typing
             .last_typing_sent
             .is_none_or(|last| now.duration_since(last).as_secs() >= 8);
-        if should_send && !state.input.is_empty() {
-            state.last_typing_sent = Some(now);
-            let api_client_clone = state.api_client.clone();
+        if should_send && !state.data.input.buffer.is_empty() {
+            state.data.typing.last_typing_sent = Some(now);
+            let api_client_clone = state.client.api.clone();
             let channel_id_clone = channel.get_id().clone();
             tokio::spawn(async move {
                 let _ = api_client_clone
@@ -843,16 +826,16 @@ pub async fn handle_keys_events(
     action: AppAction,
     tx_action: Sender<AppAction>,
 ) -> Option<KeywordAction> {
-    let emoji_map_clone = state.emoji_map.clone();
+    let emoji_map_clone = state.data.emojis.map.clone();
     let filtered_unicode: Vec<&(String, String)> = emoji_map_clone
         .iter()
-        .filter(|(name, _)| name.starts_with(&state.emoji_filter))
+        .filter(|(name, _)| name.starts_with(&state.data.emojis.filter))
         .collect();
 
-    let custom_emojis_clone = state.custom_emojis.clone();
+    let custom_emojis_clone = state.data.guilds.custom_emojis.clone();
     let filtered_custom: Vec<&Emoji> = custom_emojis_clone
         .iter()
-        .filter(|e| e.name.starts_with(&state.emoji_filter))
+        .filter(|e| e.name.starts_with(&state.data.emojis.filter))
         .collect();
 
     let total_filtered_emojis = filtered_unicode.len() + filtered_custom.len();
@@ -862,27 +845,39 @@ pub async fn handle_keys_events(
         AppAction::InputEscape => {
             // In vim mode, Esc switches from Insert to Normal mode and returns early.
             // In non-vim mode (or vim Normal mode), Esc triggers navigation (handled below).
-            if state.vim_mode && state.mode == InputMode::Insert
-                || state.mode == InputMode::Command
-                || state.mode == InputMode::Search
+            if state.data.vim.active
+                && (state.data.input.mode == InputMode::Insert
+                    || state.data.input.mode == InputMode::Command
+                    || state.data.input.mode == InputMode::Search
+                    || state.data.input.mode == InputMode::Visual
+                    || state.data.input.mode == InputMode::VisualLine)
             {
-                state.mode = InputMode::Normal;
-                if state.mode == InputMode::Command || state.mode == InputMode::Search {
-                    state.input = state.saved_input.clone().unwrap_or_default();
-                    state.saved_input = None;
+                state.data.input.mode = InputMode::Normal;
+                if let Some(vim_state) = &mut state.data.vim.state {
+                    vim_state.visual_start = None;
                 }
-                let pos = if state.cursor_position <= state.input.len() && state.cursor_position > 0
+                if state.data.input.mode == InputMode::Command
+                    || state.data.input.mode == InputMode::Search
                 {
-                    state.cursor_position
+                    state.data.input.buffer = state.data.input.saved.clone().unwrap_or_default();
+                    state.data.input.saved = None;
+                }
+                let pos = if state.data.cursor_position <= state.data.input.buffer.len()
+                    && state.data.cursor_position > 0
+                {
+                    state.data.cursor_position
                 } else {
-                    state.input.len()
+                    state.data.input.buffer.len()
                 };
-                if let Some(c) = state.input[..pos].chars().next_back()
+                if let Some(c) = state.data.input.buffer[..pos].chars().next_back()
                     && c != '\n'
                 {
-                    state.cursor_position = state.cursor_position.saturating_sub(c.len_utf8());
+                    state.data.cursor_position =
+                        state.data.cursor_position.saturating_sub(c.len_utf8());
                 }
-                if !(state.cursor_position == state.input.len() && state.input.ends_with('\n')) {
+                if !(state.data.cursor_position == state.data.input.buffer.len()
+                    && state.data.input.buffer.ends_with('\n'))
+                {
                     vim::clamp_cursor(&mut state);
                 }
                 return None;
@@ -897,13 +892,14 @@ pub async fn handle_keys_events(
                     tx_action.send(AppAction::TransitionToHome).await.ok();
                 }
                 AppState::SelectingChannel(_) => {
-                    state.guild_members = Vec::new();
-                    state.selected_guild = None;
+                    state.data.guilds.members = Vec::new();
+                    state.data.guilds.selected = None;
                     tx_action.send(AppAction::TransitionToGuilds).await.ok();
                 }
                 AppState::Chatting(channel) => {
                     let channel = match state
-                        .api_client
+                        .client
+                        .api
                         .get_channel(channel.get_id().as_str())
                         .await
                     {
@@ -925,7 +921,7 @@ pub async fn handle_keys_events(
                     } else {
                         match channel.guild_id {
                             Some(guild_id) => {
-                                let guild = state.api_client.get_guild(guild_id.as_str()).await;
+                                let guild = state.client.api.get_guild(guild_id.as_str()).await;
                                 if let Ok(guild) = guild {
                                     tx_action
                                         .send(AppAction::TransitionToChannels(Box::new(
@@ -975,23 +971,23 @@ pub async fn handle_keys_events(
             // but without necessarily switching mode if we want to be strict.
             // However, standard behavior usually implies switching to insert or just inserting.
             // Let's just insert.
-            let pos = state.cursor_position;
-            state.input.insert_str(pos, &text);
-            state.cursor_position += text.len();
+            let pos = state.data.cursor_position;
+            state.data.input.buffer.insert_str(pos, &text);
+            state.data.cursor_position += text.len();
             handle_user_typing(&mut state);
         }
         AppAction::InputChar(c) => {
-            if c == ':' && (!state.vim_mode || state.mode == InputMode::Insert) {
+            if c == ':' && (!state.data.vim.active || state.data.input.mode == InputMode::Insert) {
                 tx_action.send(AppAction::SelectEmoji).await.ok();
                 return None;
             }
 
-            if !state.vim_mode {
+            if !state.data.vim.active {
                 insert_char_at_cursor(&mut state, tx_action.clone(), c);
                 handle_user_typing(&mut state);
             } else {
-                match state.mode {
-                    InputMode::Normal => {
+                match state.data.input.mode {
+                    InputMode::Normal | InputMode::Visual | InputMode::VisualLine => {
                         vim::handle_vim_keys(state, c, tx_action).await;
                     }
                     InputMode::Insert | InputMode::Command | InputMode::Search => {
@@ -1005,54 +1001,64 @@ pub async fn handle_keys_events(
             if let AppState::Chatting(channel) | AppState::Editing(channel, _, _) =
                 state.state.clone()
             {
-                let cursor_pos = std::cmp::min(state.cursor_position, state.input.len());
-                let is_start_of_emoji = cursor_pos == 0 || state.input[..cursor_pos].ends_with(' ');
+                let cursor_pos =
+                    std::cmp::min(state.data.cursor_position, state.data.input.buffer.len());
+                let is_start_of_emoji =
+                    cursor_pos == 0 || state.data.input.buffer[..cursor_pos].ends_with(' ');
 
                 if is_start_of_emoji {
-                    let pos = state.cursor_position;
+                    let pos = state.data.cursor_position;
                     // Track where the emoji filter starts (position of the ':')
-                    state.emoji_filter_start = Some(pos);
-                    state.input.insert(pos, ':');
-                    state.cursor_position += ':'.len_utf8();
+                    state.data.emojis.filter_start = Some(pos);
+                    state.data.input.buffer.insert(pos, ':');
+                    state.data.cursor_position += ':'.len_utf8();
                     let owned_channel = channel.clone();
                     state.state = AppState::EmojiSelection(owned_channel);
-                    state.status_message =
+                    state.data.status_message =
                         "Type to filter emoji. Enter to select. Esc to cancel.".to_string();
-                    state.emoji_filter.clear();
-                    state.selection_index = 0;
+                    state.data.emojis.filter.clear();
+                    state.data.selection_index = 0;
                 } else {
-                    let pos = state.cursor_position;
-                    state.input.insert(pos, ':');
-                    state.cursor_position += ':'.len_utf8();
+                    let pos = state.data.cursor_position;
+                    state.data.input.buffer.insert(pos, ':');
+                    state.data.cursor_position += ':'.len_utf8();
                 }
             }
         }
         AppAction::InputBackspace => {
-            if state.vim_mode && state.mode == InputMode::Normal {
-                if let Some(c) = state.input[..state.cursor_position].chars().next_back() {
-                    state.cursor_position -= c.len_utf8();
+            if state.data.vim.active && state.data.input.mode == InputMode::Normal {
+                if let Some(c) = state.data.input.buffer[..state.data.cursor_position]
+                    .chars()
+                    .next_back()
+                {
+                    state.data.cursor_position -= c.len_utf8();
                 }
                 return None;
             }
-            if state.vim_mode
-                && (state.mode == InputMode::Command || state.mode == InputMode::Search)
-                && state.input.is_empty()
+            if state.data.vim.active
+                && (state.data.input.mode == InputMode::Command
+                    || state.data.input.mode == InputMode::Search)
+                && state.data.input.buffer.is_empty()
             {
-                state.mode = InputMode::Normal;
-                state.input = state.saved_input.clone().unwrap_or_default();
-                state.saved_input = None;
-                let pos = if state.cursor_position <= state.input.len() && state.cursor_position > 0
+                state.data.input.mode = InputMode::Normal;
+                state.data.input.buffer = state.data.input.saved.clone().unwrap_or_default();
+                state.data.input.saved = None;
+                let pos = if state.data.cursor_position <= state.data.input.buffer.len()
+                    && state.data.cursor_position > 0
                 {
-                    state.cursor_position
+                    state.data.cursor_position
                 } else {
-                    state.input.len()
+                    state.data.input.buffer.len()
                 };
-                if let Some(c) = state.input[..pos].chars().next_back()
+                if let Some(c) = state.data.input.buffer[..pos].chars().next_back()
                     && c != '\n'
                 {
-                    state.cursor_position = state.cursor_position.saturating_sub(c.len_utf8());
+                    state.data.cursor_position =
+                        state.data.cursor_position.saturating_sub(c.len_utf8());
                 }
-                if !(state.cursor_position == state.input.len() && state.input.ends_with('\n')) {
+                if !(state.data.cursor_position == state.data.input.buffer.len()
+                    && state.data.input.buffer.ends_with('\n'))
+                {
                     vim::clamp_cursor(&mut state);
                 }
                 return None;
@@ -1060,62 +1066,68 @@ pub async fn handle_keys_events(
             let current_state = state.state.clone();
             match current_state {
                 AppState::Chatting(_) => {
-                    let pos = state.cursor_position;
-                    if let Some(c) = state.input[..pos].chars().next_back() {
+                    let pos = state.data.cursor_position;
+                    if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                         let char_len = c.len_utf8();
-                        state.input.remove(pos - char_len);
-                        state.cursor_position -= char_len;
+                        state.data.input.buffer.remove(pos - char_len);
+                        state.data.cursor_position -= char_len;
                     }
                     handle_user_typing(&mut state);
                 }
                 AppState::EmojiSelection(channel) => {
-                    let pos = state.cursor_position;
-                    if let Some(c) = state.input[..pos].chars().next_back() {
+                    let pos = state.data.cursor_position;
+                    if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                         let char_len = c.len_utf8();
-                        state.input.remove(pos - char_len);
-                        state.cursor_position -= char_len;
+                        state.data.input.buffer.remove(pos - char_len);
+                        state.data.cursor_position -= char_len;
                         // Recompute emoji_filter based on the current input and emoji_filter_start.
-                        if let Some(start) = state.emoji_filter_start {
+                        if let Some(start) = state.data.emojis.filter_start {
                             // Position just after the ':' that started the emoji filter.
                             let filter_start = start + ':'.len_utf8();
-                            if state.cursor_position <= start || filter_start > state.input.len() {
+                            if state.data.cursor_position <= start
+                                || filter_start > state.data.input.buffer.len()
+                            {
                                 // Cursor moved to or before the ':' (or indices are invalid);
                                 // clear the filter as we're no longer within the emoji filter.
-                                state.emoji_filter.clear();
+                                state.data.emojis.filter.clear();
                             } else {
-                                let end = std::cmp::min(state.cursor_position, state.input.len());
+                                let end = std::cmp::min(
+                                    state.data.cursor_position,
+                                    state.data.input.buffer.len(),
+                                );
                                 if filter_start <= end {
-                                    state.emoji_filter = state.input[filter_start..end].to_string();
+                                    state.data.emojis.filter =
+                                        state.data.input.buffer[filter_start..end].to_string();
                                 } else {
-                                    state.emoji_filter.clear();
+                                    state.data.emojis.filter.clear();
                                 }
                             }
                         } else {
                             // No known start of emoji filter; be conservative and clear it.
-                            state.emoji_filter.clear();
+                            state.data.emojis.filter.clear();
                         }
-                        if state.emoji_filter.is_empty() {
+                        if state.data.emojis.filter.is_empty() {
                             state.state = AppState::Chatting(channel.clone());
-                            state.emoji_filter_start = None;
-                            state.status_message =
+                            state.data.emojis.filter_start = None;
+                            state.data.status_message =
                                 "Chatting in channel. Press Enter to send message. Esc to return to channels"
                                     .to_string();
                         }
-                        state.selection_index = 0;
+                        state.data.selection_index = 0;
                     }
                 }
                 _ => {
-                    let pos = if state.cursor_position <= state.input.len()
-                        && state.cursor_position > 0
+                    let pos = if state.data.cursor_position <= state.data.input.buffer.len()
+                        && state.data.cursor_position > 0
                     {
-                        state.cursor_position
+                        state.data.cursor_position
                     } else {
-                        state.input.len()
+                        state.data.input.buffer.len()
                     };
-                    if let Some(c) = state.input[..pos].chars().next_back() {
+                    if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                         let char_len = c.len_utf8();
-                        state.input.remove(pos - char_len);
-                        state.cursor_position -= char_len;
+                        state.data.input.buffer.remove(pos - char_len);
+                        state.data.cursor_position -= char_len;
                     }
                 }
             }
@@ -1124,65 +1136,72 @@ pub async fn handle_keys_events(
             let current_state = state.state.clone();
             match current_state {
                 AppState::Chatting(_) => {
-                    if !state.input.is_empty() {
+                    if !state.data.input.buffer.is_empty() {
                         let pos = {
-                            if state.cursor_position >= state.input.len() {
-                                state.cursor_position = state.input.len().saturating_sub(1);
+                            if state.data.cursor_position >= state.data.input.buffer.len() {
+                                state.data.cursor_position =
+                                    state.data.input.buffer.len().saturating_sub(1);
                             }
-                            state.cursor_position.saturating_add(1)
+                            state.data.cursor_position.saturating_add(1)
                         };
-                        if let Some(c) = state.input[..pos].chars().next_back() {
+                        if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                             let char_len = c.len_utf8();
-                            state.input.remove(pos - char_len);
+                            state.data.input.buffer.remove(pos - char_len);
                         }
                     }
                     handle_user_typing(&mut state);
                 }
                 AppState::EmojiSelection(channel) => {
-                    let pos = state.cursor_position + 1;
-                    if let Some(c) = state.input[..pos].chars().next_back() {
+                    let pos = state.data.cursor_position + 1;
+                    if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                         let char_len = c.len_utf8();
-                        state.input.remove(pos - char_len);
+                        state.data.input.buffer.remove(pos - char_len);
                         // Recompute emoji_filter based on the current input and emoji_filter_start.
-                        if let Some(start) = state.emoji_filter_start {
+                        if let Some(start) = state.data.emojis.filter_start {
                             // Position just after the ':' that started the emoji filter.
                             let filter_start = start + ':'.len_utf8();
-                            if state.cursor_position <= start || filter_start > state.input.len() {
+                            if state.data.cursor_position <= start
+                                || filter_start > state.data.input.buffer.len()
+                            {
                                 // Cursor moved to or before the ':' (or indices are invalid);
                                 // clear the filter as we're no longer within the emoji filter.
-                                state.emoji_filter.clear();
+                                state.data.emojis.filter.clear();
                             } else {
-                                let end = std::cmp::min(state.cursor_position, state.input.len());
+                                let end = std::cmp::min(
+                                    state.data.cursor_position,
+                                    state.data.input.buffer.len(),
+                                );
                                 if filter_start <= end {
-                                    state.emoji_filter = state.input[filter_start..end].to_string();
+                                    state.data.emojis.filter =
+                                        state.data.input.buffer[filter_start..end].to_string();
                                 } else {
-                                    state.emoji_filter.clear();
+                                    state.data.emojis.filter.clear();
                                 }
                             }
                         } else {
                             // No known start of emoji filter; be conservative and clear it.
-                            state.emoji_filter.clear();
+                            state.data.emojis.filter.clear();
                         }
 
-                        if state.emoji_filter.is_empty() {
+                        if state.data.emojis.filter.is_empty() {
                             state.state = AppState::Chatting(channel.clone());
-                            state.emoji_filter_start = None;
-                            state.status_message =
+                            state.data.emojis.filter_start = None;
+                            state.data.status_message =
                                 "Chatting in channel. Press Enter to send message. Esc to return to channels"
                                     .to_string();
                         }
-                        state.emoji_index = 0;
+                        state.data.emojis.index = 0;
                     }
                 }
                 _ => {
-                    let pos = if state.cursor_position < state.input.len() {
-                        state.cursor_position + 1
+                    let pos = if state.data.cursor_position < state.data.input.buffer.len() {
+                        state.data.cursor_position + 1
                     } else {
-                        state.input.len()
+                        state.data.input.buffer.len()
                     };
-                    if let Some(c) = state.input[..pos].chars().next_back() {
+                    if let Some(c) = state.data.input.buffer[..pos].chars().next_back() {
                         let char_len = c.len_utf8();
-                        state.input.remove(pos - char_len);
+                        state.data.input.buffer.remove(pos - char_len);
                     }
                 }
             }
@@ -1219,21 +1238,24 @@ pub async fn handle_keys_events(
 
             if let Some(newest_msg) = new_messages.iter().max_by_key(|m| &m.id) {
                 // Check if the newest message is newer than what we currently have
-                let should_ack = if let Some(last_id) = state.last_message_ids.get(&channel_id) {
-                    // Message IDs can be compared as u64 safely
-                    let new_id_num = newest_msg.id.parse::<u64>().unwrap_or_default();
-                    let last_id_num = last_id.parse::<u64>().unwrap_or_default();
-                    new_id_num > last_id_num
-                } else {
-                    true
-                };
+                let should_ack =
+                    if let Some(last_id) = state.data.notifs.last_message_ids.get(&channel_id) {
+                        // Message IDs can be compared as u64 safely
+                        let new_id_num = newest_msg.id.parse::<u64>().unwrap_or_default();
+                        let last_id_num = last_id.parse::<u64>().unwrap_or_default();
+                        new_id_num > last_id_num
+                    } else {
+                        true
+                    };
 
                 if should_ack {
                     state
+                        .data
+                        .notifs
                         .last_message_ids
                         .insert(channel_id.clone(), newest_msg.id.clone());
 
-                    let api_client_clone = state.api_client.clone();
+                    let api_client_clone = state.client.api.clone();
                     let channel_id_clone = channel_id.clone();
                     let msg_id_clone = newest_msg.id.clone();
                     tokio::spawn(async move {
@@ -1251,7 +1273,7 @@ pub async fn handle_keys_events(
 
             // Clear any active desktop notifications for this channel
             #[cfg(all(unix, not(target_os = "macos")))]
-            if let Some(handles) = state.active_notifications.remove(&channel_id) {
+            if let Some(handles) = state.data.notifs.active.remove(&channel_id) {
                 for handle in handles {
                     handle.close();
                 }
@@ -1259,35 +1281,37 @@ pub async fn handle_keys_events(
             // Seed the username cache from all loaded message authors
             for msg in &new_messages {
                 state
+                    .data
+                    .dms
                     .user_names
                     .insert(msg.author.id.clone(), msg.author.username.clone());
             }
-            state.messages = new_messages
+            state.data.guilds.messages = new_messages
                 .into_iter()
-                .filter(|m| !state.deleted_message_ids.contains(&m.id))
+                .filter(|m| !state.data.deleted_message_ids.contains(&m.id))
                 .collect();
         }
         AppAction::ApiUpdateGuilds(new_guilds) => {
-            state.guilds = new_guilds.clone();
-            state.status_message =
+            state.data.guilds.joined = new_guilds.clone();
+            state.data.status_message =
                 "Select a server. Use arrows to navigate, Enter to select & Esc to quit."
                     .to_string();
         }
         AppAction::ApiUpdateChannel(new_channels) => {
-            state.channels =
+            state.data.guilds.channels =
                 Channel::filter_channels_by_categories(new_channels).unwrap_or_default();
-            let text_channels_count = state.channels.len();
+            let text_channels_count = state.data.guilds.channels.len();
             if text_channels_count > 0 {
-                state.status_message =
+                state.data.status_message =
                     "Channels loaded. Select one to chat. (Esc to return to Servers)".to_string();
             } else {
-                state.status_message =
+                state.data.status_message =
                     "No text channels found. (Esc to return to Servers)".to_string();
             }
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         AppAction::ApiUpdateEmojis(new_emojis) => {
-            state.custom_emojis = new_emojis;
+            state.data.guilds.custom_emojis = new_emojis;
         }
         AppAction::ApiUpdateDMs(mut new_dms) => {
             // Sort DMs by newest last_message_id
@@ -1300,46 +1324,58 @@ pub async fn handle_keys_events(
                         .unwrap_or(0),
                 )
             });
-            state.dms = new_dms.clone();
+            state.data.dms.channels = new_dms.clone();
 
             // Initialize last_message_ids for all DMs on load and seed username cache
             for dm in new_dms {
                 // Seed user_names from all DM recipients
                 for recipient in &dm.recipients {
                     state
+                        .data
+                        .dms
                         .user_names
                         .insert(recipient.id.clone(), recipient.username.clone());
                 }
                 if let Some(msg_id) = dm.last_message_id {
                     // Only insert if it doesn't already exist so we don't accidentally
                     // overwrite during a mid-session refresh
-                    state.last_message_ids.entry(dm.id).or_insert(msg_id);
+                    state
+                        .data
+                        .notifs
+                        .last_message_ids
+                        .entry(dm.id)
+                        .or_insert(msg_id);
                 }
             }
 
-            let dms_count = state.dms.len();
+            let dms_count = state.data.dms.channels.len();
             if dms_count > 0 {
-                state.status_message =
+                state.data.status_message =
                     "DMs loaded. Select one to chat. (Esc to return to Home)".to_string();
             } else {
-                state.status_message = "No DMs found. (Esc to return to Home)".to_string();
+                state.data.status_message = "No DMs found. (Esc to return to Home)".to_string();
             }
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         AppAction::ApiUpdateContext(new_context) => {
-            state.context = new_context;
+            state.data.context = new_context;
         }
         AppAction::ApiUpdateCurrentUser(user) => {
-            state.current_user = Some(user);
+            state.data.current_user = Some(user);
         }
         AppAction::GatewayTypingStart(channel_id, user_id, display_name) => {
             // Typing indicator expires after 10 seconds or when the user sends a message
             let now = std::time::Instant::now();
-            let channel_typers = state.typing_users.entry(channel_id).or_default();
+            let channel_typers = state
+                .data
+                .typing
+                .typing_users
+                .entry(channel_id)
+                .or_default();
             channel_typers.insert(user_id.clone(), now);
             // Cache the display name if provided by the gateway event
             if let Some(name) = display_name {
-                state.user_names.insert(user_id, name);
+                state.data.dms.user_names.insert(user_id, name);
             }
         }
         AppAction::GatewayMessageCreate(msg) => {
@@ -1350,24 +1386,30 @@ pub async fn handle_keys_events(
             };
 
             if Some(msg.channel_id.clone()) == active_channel_id {
-                let mut msgs = state.messages.clone();
+                let mut msgs = state.data.guilds.messages.clone();
                 // Cache author username from incoming message
                 state
+                    .data
+                    .dms
                     .user_names
                     .insert(msg.author.id.clone(), msg.author.username.clone());
                 msgs.push(msg.clone());
                 // Sort by descending ID: newest messages first (to match REST API response)
                 msgs.sort_by_key(|m| std::cmp::Reverse(m.id.parse::<u64>().unwrap_or_default()));
-                if state.selection_index > 0 {
-                    state.selection_index += 1;
+                if state.data.selection_index > 0
+                    && let AppState::Chatting(_) = &state.state
+                {
+                    state.data.selection_index += 1;
                 }
-                state.messages = msgs;
+                state.data.guilds.messages = msgs;
 
                 state
+                    .data
+                    .notifs
                     .last_message_ids
                     .insert(msg.channel_id.clone(), msg.id.clone());
 
-                let api_client_clone = state.api_client.clone();
+                let api_client_clone = state.client.api.clone();
                 let channel_id_clone = msg.channel_id.clone();
                 let msg_id_clone = msg.id.clone();
                 tokio::spawn(async move {
@@ -1376,20 +1418,27 @@ pub async fn handle_keys_events(
                         .await;
                 });
             } else {
-                let is_dm = state.dms.iter().any(|dm| dm.id == msg.channel_id);
+                let is_dm = state
+                    .data
+                    .dms
+                    .channels
+                    .iter()
+                    .any(|dm| dm.id == msg.channel_id);
                 let is_mentioned = state
+                    .data
                     .current_user
                     .as_ref()
                     .is_some_and(|u| msg.mentions.iter().any(|m| m.id == u.id));
 
                 if is_dm || is_mentioned {
                     let is_self = state
+                        .data
                         .current_user
                         .as_ref()
                         .is_some_and(|u| u.id == msg.author.id);
 
                     if !is_self {
-                        let sender = if state.notifs_display_username {
+                        let sender = if state.data.display_username {
                             msg.author.username.clone()
                         } else {
                             msg.author
@@ -1399,9 +1448,9 @@ pub async fn handle_keys_events(
                         };
                         let is_dm_clone = is_dm;
                         let msg_clone = msg.clone();
-                        let discreet = state.discreet_notifs;
+                        let discreet = state.data.notifs.discreet;
 
-                        let guild_clone = state.selected_guild.as_ref().and_then(|sg| {
+                        let guild_clone = state.data.guilds.selected.as_ref().and_then(|sg| {
                             if msg.guild_id.as_deref() == Some(sg.id.as_str()) {
                                 Some(sg.clone())
                             } else {
@@ -1411,7 +1460,9 @@ pub async fn handle_keys_events(
 
                         let guild_name = msg.guild_id.as_ref().and_then(|gid| {
                             state
+                                .data
                                 .guilds
+                                .joined
                                 .iter()
                                 .find(|g| &g.id == gid)
                                 .map(|g| g.name.clone())
@@ -1419,9 +1470,10 @@ pub async fn handle_keys_events(
 
                         let mut cached_channel_name = None;
                         if msg.guild_id.is_some()
-                            && state.selected_guild.as_ref().map(|g| &g.id) == msg.guild_id.as_ref()
+                            && state.data.guilds.selected.as_ref().map(|g| &g.id)
+                                == msg.guild_id.as_ref()
                         {
-                            for channel in &state.channels {
+                            for channel in &state.data.guilds.channels {
                                 if channel.id == msg.channel_id {
                                     cached_channel_name = Some(channel.name.clone());
                                     break;
@@ -1436,70 +1488,95 @@ pub async fn handle_keys_events(
                             }
                         }
 
-                        let api_client = state.api_client.clone();
+                        let api_client = state.client.api.clone();
                         let tx = tx_action.clone();
 
-                        tokio::spawn(async move {
-                            let (summary, body) = if discreet {
-                                let body = if is_dm_clone {
-                                    "Sent you a DM".to_string()
+                        let is_dnd = state.data.notifs.is_invisible_dnd
+                            || state
+                                .data
+                                .current_user
+                                .as_ref()
+                                .and_then(|u| state.data.dms.user_statuses.get(&u.id))
+                                .map(|s| s.as_str())
+                                == Some("dnd");
+
+                        if !is_dnd {
+                            tokio::spawn(async move {
+                                let (summary, body) = if discreet {
+                                    let body = if is_dm_clone {
+                                        "Sent you a DM".to_string()
+                                    } else {
+                                        "Mentioned you in a channel".to_string()
+                                    };
+                                    (sender, body)
                                 } else {
-                                    "Mentioned you in a channel".to_string()
-                                };
-                                (sender, body)
-                            } else {
-                                let body =
-                                    if msg_clone.content.as_ref().is_some_and(|c| !c.is_empty()) {
+                                    let body = if msg_clone
+                                        .content
+                                        .as_ref()
+                                        .is_some_and(|c| !c.is_empty())
+                                    {
                                         msg_clone.map_mentions(guild_clone)
                                     } else {
                                         "Sent an attachment".to_string()
                                     };
-                                let mut final_sender = sender.clone();
+                                    let mut final_sender = sender.clone();
 
-                                if !is_dm_clone {
-                                    let mut channel_name = String::new();
-                                    if let Some(name) = cached_channel_name {
-                                        channel_name = format!("#{}", name);
-                                    } else if let Ok(crate::api::AnyChannel::Guild(c)) =
-                                        api_client.get_channel(&msg_clone.channel_id).await
-                                    {
-                                        channel_name = format!("#{}", c.name);
-                                    }
-
-                                    if let Some(gn) = guild_name {
-                                        if !channel_name.is_empty() {
-                                            final_sender =
-                                                format!("{} in {} ({})", sender, gn, channel_name);
-                                        } else {
-                                            final_sender = format!("{} in {}", sender, gn);
+                                    if !is_dm_clone {
+                                        let mut channel_name = String::new();
+                                        if let Some(name) = cached_channel_name {
+                                            channel_name = format!("#{}", name);
+                                        } else if let Ok(crate::api::AnyChannel::Guild(c)) =
+                                            api_client.get_channel(&msg_clone.channel_id).await
+                                        {
+                                            channel_name = format!("#{}", c.name);
                                         }
-                                    } else if !channel_name.is_empty() {
-                                        final_sender = format!("{} in {}", sender, channel_name);
+
+                                        if let Some(gn) = guild_name {
+                                            if !channel_name.is_empty() {
+                                                final_sender = format!(
+                                                    "{} in {} ({})",
+                                                    sender, gn, channel_name
+                                                );
+                                            } else {
+                                                final_sender = format!("{} in {}", sender, gn);
+                                            }
+                                        } else if !channel_name.is_empty() {
+                                            final_sender =
+                                                format!("{} in {}", sender, channel_name);
+                                        }
                                     }
-                                }
 
-                                (final_sender, body)
-                            };
+                                    (final_sender, body)
+                                };
 
-                            let _ = tx
-                                .send(AppAction::DesktopNotification(
-                                    summary,
-                                    body,
-                                    msg_clone.channel_id,
-                                ))
-                                .await;
-                        });
+                                let _ = tx
+                                    .send(AppAction::DesktopNotification(
+                                        summary,
+                                        body,
+                                        msg_clone.channel_id,
+                                    ))
+                                    .await;
+                            });
+                        }
                     }
 
                     if is_dm {
                         // Jump this DM to the top of the list
-                        if let Some(pos) = state.dms.iter().position(|dm| dm.id == msg.channel_id) {
-                            let mut dm = state.dms.remove(pos);
+                        if let Some(pos) = state
+                            .data
+                            .dms
+                            .channels
+                            .iter()
+                            .position(|dm| dm.id == msg.channel_id)
+                        {
+                            let mut dm = state.data.dms.channels.remove(pos);
                             dm.last_message_id = Some(msg.id.clone());
-                            state.dms.insert(0, dm);
+                            state.data.dms.channels.insert(0, dm);
                         }
 
                         state
+                            .data
+                            .notifs
                             .last_message_ids
                             .insert(msg.channel_id.clone(), msg.id.clone());
                     }
@@ -1507,16 +1584,18 @@ pub async fn handle_keys_events(
             }
 
             // Remove the typing indicator if the author sent a message in the channel
-            if let Some(typers) = state.typing_users.get_mut(&msg.channel_id) {
+            if let Some(typers) = state.data.typing.typing_users.get_mut(&msg.channel_id) {
                 typers.remove(&msg.author.id);
             }
         }
         AppAction::GatewayReadySupplemental(statuses, status_texts) => {
-            state.user_statuses.extend(statuses);
-            state.user_status_texts.extend(status_texts);
+            state.data.dms.user_statuses.extend(statuses);
+            state.data.dms.user_status_texts.extend(status_texts);
         }
         AppAction::GatewayPresenceUpdate(presence) => {
             state
+                .data
+                .dms
                 .user_statuses
                 .insert(presence.user.id.clone(), presence.status);
             if let Some(text) = presence.activities.iter().find_map(|a| {
@@ -1527,20 +1606,22 @@ pub async fn handle_keys_events(
                 }
             }) {
                 state
+                    .data
+                    .dms
                     .user_status_texts
                     .insert(presence.user.id, text.unwrap_or_default());
             } else {
-                state.user_status_texts.remove(&presence.user.id);
+                state.data.dms.user_status_texts.remove(&presence.user.id);
             }
         }
         AppAction::GatewayGuildMembersChunk(_, members, _, chunk_count) => {
             if chunk_count.parse::<usize>().unwrap_or_default() == 0 {
-                state.guild_members = Vec::new();
+                state.data.guilds.members = Vec::new();
             }
-            state.guild_members.extend(members);
+            state.data.guilds.members.extend(members);
         }
         AppAction::GatewayMessageUpdate(msg) => {
-            let mut msgs = state.messages.clone();
+            let mut msgs = state.data.guilds.messages.clone();
             if let Some(pos) = msgs.iter().position(|m| m.id == msg.id) {
                 let mut existing = msgs[pos].clone();
                 if let Some(content) = msg.content {
@@ -1553,79 +1634,83 @@ pub async fn handle_keys_events(
                     existing.timestamp = timestamp;
                 }
                 msgs[pos] = existing;
-                state.messages = msgs;
+                state.data.guilds.messages = msgs;
             }
         }
         AppAction::GatewayMessageDelete(id, _channel_id) => {
-            let mut msgs = state.messages.clone();
+            let mut msgs = state.data.guilds.messages.clone();
             msgs.retain(|m| m.id != id);
-            state.messages = msgs;
-            state.deleted_message_ids.insert(id);
-            if state.selection_index > 0 {
-                state.selection_index -= 1;
+            state.data.guilds.messages = msgs;
+            state.data.deleted_message_ids.insert(id);
+            if state.data.selection_index > 0
+                && let AppState::Chatting(_) = &state.state
+            {
+                state.data.selection_index -= 1;
             }
         }
         AppAction::TransitionToChannels(guild) => {
-            state.input = String::new();
-            state.search_input = String::new();
-            state.cursor_position = 0;
+            state.data.input.buffer = String::new();
+            state.data.input.search = String::new();
+            state.data.cursor_position = 0;
             state.state = AppState::SelectingChannel(guild.clone());
-            state.status_message =
+            state.data.status_message =
                 "Select a server. Use arrows to navigate, Enter to select & Esc to quit"
                     .to_string();
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         AppAction::TransitionToChat(channel) => {
             // Check if we're coming from emoji selection before changing state
             if let AppState::EmojiSelection(_) = &state.state {
                 // Remove the trailing ':' and filter text if canceling emoji selection
-                if let Some(start) = state.emoji_filter_start {
-                    let end = start + ':'.len_utf8() + state.emoji_filter.len();
-                    if state.input.is_char_boundary(start) && state.input.is_char_boundary(end) {
-                        state.input.drain(start..end);
-                        state.cursor_position = start;
+                if let Some(start) = state.data.emojis.filter_start {
+                    let end = start + ':'.len_utf8() + state.data.emojis.filter.len();
+                    if state.data.input.buffer.is_char_boundary(start)
+                        && state.data.input.buffer.is_char_boundary(end)
+                    {
+                        state.data.input.buffer.drain(start..end);
+                        state.data.cursor_position = start;
                     }
                 }
-                state.emoji_filter.clear();
-                state.emoji_filter_start = None;
-                state.selection_index = 0;
+                state.data.emojis.filter.clear();
+                state.data.emojis.filter_start = None;
+                state.data.selection_index = 0;
             }
             if let AppState::Editing(_, _, _) = &state.state {
-                state.input = state.saved_input.clone().unwrap_or_default();
-                state.saved_input = None;
+                state.data.input.buffer = state.data.input.saved.clone().unwrap_or_default();
+                state.data.input.saved = None;
             }
 
             state.state = AppState::Chatting(channel);
-            state.search_input = String::new();
-            state.chat_scroll_offset = 0;
-            state.cursor_position = 0;
-            state.selection_index = 0;
-            state.last_typing_sent = None;
-            state.status_message =
+            state.data.input.search = String::new();
+            state.data.scroll_offset = 0;
+            state.data.cursor_position = 0;
+            state.data.selection_index = 0;
+            state.data.typing.last_typing_sent = None;
+            state.data.status_message =
                 "Chatting in channel. Press Enter to send message, Esc to return to channels."
                     .to_string();
         }
         AppAction::TransitionToGuilds => {
-            state.input = String::new();
-            state.search_input = String::new();
-            state.cursor_position = 0;
+            state.data.input.buffer = String::new();
+            state.data.input.search = String::new();
+            state.data.cursor_position = 0;
             state.state = AppState::SelectingGuild;
-            state.status_message =
+            state.data.status_message =
                 "Select a server. Use arrows to navigate, Enter to select & Esc to quit"
                     .to_string();
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         AppAction::TransitionToDM => {
-            state.input = String::new();
-            state.search_input = String::new();
-            state.cursor_position = 0;
+            state.data.input.buffer = String::new();
+            state.data.input.search = String::new();
+            state.data.cursor_position = 0;
             state.state = AppState::SelectingDM;
-            state.status_message =
+            state.data.status_message =
                 "Select a DM. Use arrows to navigate, Enter to select & Esc to quit".to_string();
-            state.selection_index = 0;
+            state.data.selection_index = 0;
         }
         AppAction::ApiDeleteMessage(channel_id, message_id) => {
-            let api_client_clone = state.api_client.clone();
+            let api_client_clone = state.client.api.clone();
             let channel_id_clone = channel_id.clone();
             let message_id_clone = message_id.clone();
 
@@ -1644,17 +1729,17 @@ pub async fn handle_keys_events(
             });
 
             // Optimistically remove the message from the local view and track it
-            state.deleted_message_ids.insert(message_id.clone());
-            state.messages.retain(|m| m.id != message_id);
+            state.data.deleted_message_ids.insert(message_id.clone());
+            state.data.guilds.messages.retain(|m| m.id != message_id);
 
             // Re-clamp selection index if the list shrank
-            if state.selection_index > state.messages.len() {
-                state.selection_index = state.messages.len();
+            if state.data.selection_index > state.data.guilds.messages.len() {
+                state.data.selection_index = state.data.guilds.messages.len();
             }
         }
         AppAction::ApiEditMessage(channel_id, message_id, content) => {
             let (api_client_clone, channel_id_clone, message_id_clone, content_clone) = (
-                state.api_client.clone(),
+                state.client.api.clone(),
                 channel_id.clone(),
                 message_id.clone(),
                 content.clone(),
@@ -1677,41 +1762,41 @@ pub async fn handle_keys_events(
         AppAction::TransitionToEditing(channel, message, content, c) => {
             let (message_clone, content_clone) = (message.clone(), content.clone());
 
-            state.saved_input = Some(state.input.clone());
-            state.input = content.clone();
+            state.data.input.saved = Some(state.data.input.buffer.clone());
+            state.data.input.buffer = content.clone();
 
-            if state.vim_mode {
-                state.mode = InputMode::Insert;
-                if let Some(vim_state) = &mut state.vim_state {
+            if state.data.vim.active {
+                state.data.input.mode = InputMode::Insert;
+                if let Some(vim_state) = &mut state.data.vim.state {
                     vim_state.operator = None;
                     vim_state.pending_keys.clear();
                 }
             }
 
-            state.cursor_position = match c {
+            state.data.cursor_position = match c {
                 'i' | 'I' => 0,
                 'a' => content.chars().next().map(|ch| ch.len_utf8()).unwrap_or(0),
                 _ => content.len(),
             };
 
-            state.selection_index = 0;
+            state.data.selection_index = 0;
             state.state =
                 AppState::Editing(channel.clone(), Box::new(message_clone), content_clone);
-            state.status_message =
+            state.data.status_message =
                 "Editing a message in channel. Press Enter to send message. Esc to return to channels"
                     .to_string();
         }
         AppAction::TransitionToHome => {
-            state.input = String::new();
-            state.search_input = String::new();
-            state.cursor_position = 0;
+            state.data.input.buffer = String::new();
+            state.data.input.search = String::new();
+            state.data.cursor_position = 0;
             state.state = AppState::Home;
-            state.status_message = "Browse either DMs or Servers. Use arrows to navigate, Enter to select & Esc to quit".to_string();
-            state.selection_index = 0;
+            state.data.status_message = "Browse either DMs or Servers. Use arrows to navigate, Enter to select & Esc to quit".to_string();
+            state.data.selection_index = 0;
         }
         AppAction::TransitionToLoading(redirect_state) => {
             state.state = AppState::Loading(redirect_state);
-            state.status_message = "Loading...".to_string();
+            state.data.status_message = "Loading...".to_string();
         }
         AppAction::TransitionToLogs => {
             let window = match &state.state {
@@ -1724,7 +1809,7 @@ pub async fn handle_keys_events(
                 _ => Window::Home,
             };
             state.state = AppState::Logs(window);
-            state.status_message = "Reading Logs".to_string();
+            state.data.status_message = "Reading Logs".to_string();
         }
         AppAction::EndLoading | AppAction::EndLogs => match &state.state {
             AppState::Loading(redirect) | AppState::Logs(redirect) => match redirect {
@@ -1744,11 +1829,11 @@ pub async fn handle_keys_events(
         }?,
         AppAction::TransitionToLoadingMessages => {
             state.is_loading = true;
-            state.status_message = "Loading Messages...".to_string();
+            state.data.status_message = "Loading Messages...".to_string();
         }
         AppAction::EndLoadingMessages => {
             state.is_loading = false;
-            state.status_message =
+            state.data.status_message =
                 "Chatting in channel. Press Enter to send message, Esc to return to channels."
                     .to_string();
         }
@@ -1761,7 +1846,9 @@ pub async fn handle_keys_events(
             {
                 #[cfg(not(target_os = "windows"))]
                 state
-                    .active_notifications
+                    .data
+                    .notifs
+                    .active
                     .entry(channel_id)
                     .or_default()
                     .push(handle);
@@ -1773,7 +1860,7 @@ pub async fn handle_keys_events(
             let now = std::time::Instant::now();
             let mut empty_channels = Vec::new();
 
-            for (channel_id, typers) in state.typing_users.iter_mut() {
+            for (channel_id, typers) in state.data.typing.typing_users.iter_mut() {
                 typers.retain(|_, timestamp| now.duration_since(*timestamp).as_secs() < 10);
                 if typers.is_empty() {
                     empty_channels.push(channel_id.clone());
@@ -1781,23 +1868,23 @@ pub async fn handle_keys_events(
             }
 
             for channel_id in empty_channels {
-                state.typing_users.remove(&channel_id);
+                state.data.typing.typing_users.remove(&channel_id);
             }
 
             return Some(KeywordAction::Continue);
         }
         AppAction::NewLogReceived(log) => {
-            state.logs.insert(0, log);
+            state.data.logs.insert(0, log);
             if let AppState::Logs(_) = &state.state
-                && state.selection_index > 0
+                && state.data.selection_index > 0
             {
-                state.selection_index += 1;
+                state.data.selection_index += 1;
             }
         }
         AppAction::ClearLogs => {
-            state.logs.clear();
+            state.data.logs.clear();
             if let AppState::Logs(_) = &state.state {
-                state.selection_index = 0;
+                state.data.selection_index = 0;
             }
         }
     }
