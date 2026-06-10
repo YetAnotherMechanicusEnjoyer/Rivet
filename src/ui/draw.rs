@@ -22,11 +22,11 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
         .constraints([Constraint::Percentage(90), Constraint::Percentage(10)].as_ref())
         .split(area);
 
-    app.terminal_height = chunks[0].height as usize;
-    app.terminal_width = chunks[0].width as usize;
+    app.data.terminal_dimensions.1 = chunks[0].height as usize;
+    app.data.terminal_dimensions.0 = chunks[0].width as usize;
 
-    let max_height = app.terminal_height.saturating_sub(2);
-    let max_width = app.terminal_width.saturating_sub(2) as u16;
+    let max_height = app.data.terminal_dimensions.1.saturating_sub(2);
+    let max_width = app.data.terminal_dimensions.0.saturating_sub(2) as u16;
 
     match &app.state {
         AppState::Loading(_) => {
@@ -77,17 +77,22 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .highlight_style(Style::default().reversed())
                 .highlight_symbol(">> ");
 
-            app.selection_index = app.selection_index.min(options.len().saturating_sub(1));
+            app.data.selection_index = app
+                .data
+                .selection_index
+                .min(options.len().saturating_sub(1));
 
-            let mut state = ListState::default().with_selected(Some(app.selection_index));
+            let mut state = ListState::default().with_selected(Some(app.data.selection_index));
             f.render_widget(Clear, chunks[0]);
             f.render_stateful_widget(list, chunks[0], &mut state);
         }
         AppState::SelectingDM => {
-            let filter_text = app.search_input.to_lowercase();
+            let filter_text = app.data.input.search.to_lowercase();
 
             let filtered_dms: Vec<&DM> = app
+                .data
                 .dms
+                .channels
                 .iter()
                 .filter(|d| d.get_name().to_lowercase().contains(&filter_text))
                 .collect();
@@ -99,6 +104,8 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
 
                     if d.channel_type == 1 && d.recipients.len() == 1 {
                         let (status_char, status_color) = match app
+                            .data
+                            .dms
                             .user_statuses
                             .get(&d.recipients[0].id)
                             .map(|s| s.as_str())
@@ -132,7 +139,8 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                     // Show custom status text next to the username for 1:1 DMs
                     if d.channel_type == 1
                         && d.recipients.len() == 1
-                        && let Some(status_text) = app.user_status_texts.get(&d.recipients[0].id)
+                        && let Some(status_text) =
+                            app.data.dms.user_status_texts.get(&d.recipients[0].id)
                         && !status_text.is_empty()
                     {
                         spans.push(Span::styled(
@@ -146,7 +154,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .collect();
 
             let num_filtered = items.len();
-            app.selection_index = app.selection_index.min(num_filtered.saturating_sub(1));
+            app.data.selection_index = app.data.selection_index.min(num_filtered.saturating_sub(1));
 
             let list = List::new(items)
                 .block(
@@ -161,15 +169,17 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .highlight_style(Style::default().reversed())
                 .highlight_symbol(">> ");
 
-            let mut state = ListState::default().with_selected(Some(app.selection_index));
+            let mut state = ListState::default().with_selected(Some(app.data.selection_index));
             f.render_widget(Clear, chunks[0]);
             f.render_stateful_widget(list, chunks[0], &mut state);
         }
         AppState::SelectingGuild => {
-            let filter_text = app.search_input.to_lowercase();
+            let filter_text = app.data.input.search.to_lowercase();
 
             let filtered_guilds: Vec<&PartialGuild> = app
+                .data
                 .guilds
+                .joined
                 .iter()
                 .filter(|g| g.name.to_lowercase().contains(&filter_text))
                 .collect();
@@ -191,7 +201,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .collect();
 
             let num_filtered = items.len();
-            app.selection_index = app.selection_index.min(num_filtered.saturating_sub(1));
+            app.data.selection_index = app.data.selection_index.min(num_filtered.saturating_sub(1));
 
             let list = List::new(items)
                 .block(
@@ -206,14 +216,14 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .highlight_style(Style::default().reversed())
                 .highlight_symbol(">> ");
 
-            let mut state = ListState::default().with_selected(Some(app.selection_index));
+            let mut state = ListState::default().with_selected(Some(app.data.selection_index));
             f.render_widget(Clear, chunks[0]);
             f.render_stateful_widget(list, chunks[0], &mut state);
         }
         AppState::SelectingChannel(guild) => {
-            let filter_text = app.search_input.to_lowercase();
+            let filter_text = app.data.input.search.to_lowercase();
 
-            let permission_context = &app.context;
+            let permission_context = &app.data.context;
 
             let mut list_items: Vec<ListItem> = Vec::new();
 
@@ -226,7 +236,9 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                     && (filter_text.is_empty() || c.name.to_lowercase().contains(&filter_text))
             };
 
-            app.channels
+            app.data
+                .guilds
+                .channels
                 .iter()
                 .filter(|c| {
                     if c.children.is_none() && c.channel_type != 4 {
@@ -288,9 +300,11 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 });
 
             let num_filtered = list_items.len();
-            app.selection_index = app.selection_index.min(num_filtered.saturating_sub(1));
+            app.data.selection_index = app.data.selection_index.min(num_filtered.saturating_sub(1));
 
             let hidden_items: Vec<ListItem> = app
+                .data
+                .guilds
                 .channels
                 .iter()
                 .flat_map(|c| {
@@ -337,7 +351,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 "Channels for Guild: {} | Channels found: {} | Actual index: {}",
                 guild.name,
                 num_filtered.saturating_sub(1),
-                app.selection_index
+                app.data.selection_index
             );
 
             let list = List::new(list_items)
@@ -350,7 +364,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .highlight_style(Style::default().reversed())
                 .highlight_symbol(">> ");
 
-            let mut state = ListState::default().with_selected(Some(app.selection_index));
+            let mut state = ListState::default().with_selected(Some(app.data.selection_index));
             f.render_widget(Clear, chunks[0]);
             f.render_stateful_widget(list, chunks[0], &mut state);
         }
@@ -362,6 +376,8 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             let mut messages_reversed_with_index = app
+                .data
+                .guilds
                 .messages
                 .iter()
                 .filter(|m| {
@@ -369,7 +385,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         .clone()
                         .unwrap_or_default()
                         .to_lowercase()
-                        .contains(app.search_input.to_lowercase().as_str())
+                        .contains(app.data.input.search.to_lowercase().as_str())
                 })
                 .enumerate()
                 .collect::<Vec<_>>();
@@ -380,9 +396,9 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
 
             for (original_idx, message) in messages_reversed_with_index.into_iter() {
                 let is_selected =
-                    app.selection_index > 0 && app.selection_index - 1 == original_idx;
+                    app.data.selection_index > 0 && app.data.selection_index - 1 == original_idx;
 
-                let author = if app.display_username {
+                let author = if app.data.display_username {
                     message.author.username.clone()
                 } else {
                     message
@@ -463,10 +479,10 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 let end_y = total_visual_height;
 
                 if is_selected {
-                    if start_y < app.chat_scroll_offset {
-                        app.chat_scroll_offset = start_y;
-                    } else if end_y > app.chat_scroll_offset + max_height {
-                        app.chat_scroll_offset = end_y.saturating_sub(max_height);
+                    if start_y < app.data.scroll_offset {
+                        app.data.scroll_offset = start_y;
+                    } else if end_y > app.data.scroll_offset + max_height {
+                        app.data.scroll_offset = end_y.saturating_sub(max_height);
                     }
                 }
 
@@ -489,7 +505,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                     .unwrap_or("")
                     .to_string();
 
-                let name = if app.display_username {
+                let name = if app.data.display_username {
                     message.author.username.clone()
                 } else {
                     message
@@ -502,7 +518,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 let author = format!(" {name}: ");
 
                 let content;
-                if let Some(guild) = app.selected_guild.clone() {
+                if let Some(guild) = app.data.guilds.selected.clone() {
                     content = message.map_mentions(Some(guild));
                 } else {
                     content = message.map_mentions(None);
@@ -510,7 +526,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
 
                 let content_lines: Vec<&str> = content.split('\n').collect();
 
-                let mentionned = if let Some(author) = &app.current_user {
+                let mentionned = if let Some(author) = &app.data.current_user {
                     message.mentions.contains(author)
                 } else {
                     false
@@ -558,8 +574,8 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            if app.selection_index == 0 {
-                app.chat_scroll_offset = total_visual_height.saturating_sub(max_height);
+            if app.data.selection_index == 0 {
+                app.data.scroll_offset = total_visual_height.saturating_sub(max_height);
             }
 
             let mut title_spans = vec![Span::styled(
@@ -572,6 +588,8 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 && d.recipients.len() == 1
             {
                 let (status_char, status_color) = match app
+                    .data
+                    .dms
                     .user_statuses
                     .get(&d.recipients[0].id)
                     .map(|s| s.as_str())
@@ -594,7 +612,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
             if let crate::api::AnyChannel::Direct(d) = &**channel
                 && d.channel_type == 1
                 && d.recipients.len() == 1
-                && let Some(status_text) = app.user_status_texts.get(&d.recipients[0].id)
+                && let Some(status_text) = app.data.dms.user_status_texts.get(&d.recipients[0].id)
                 && !status_text.is_empty()
             {
                 title_spans.push(Span::styled(
@@ -613,7 +631,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         .border_type(BorderType::Double),
                 )
                 .wrap(Wrap { trim: false })
-                .scroll((app.chat_scroll_offset as u16, 0));
+                .scroll((app.data.scroll_offset as u16, 0));
 
             f.render_widget(Clear, chunks[0]);
             f.render_widget(paragraph, chunks[0]);
@@ -624,11 +642,12 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             let mut log_messages = app
+                .data
                 .logs
                 .iter()
                 .filter(|m| {
                     m.to_lowercase()
-                        .contains(app.search_input.to_lowercase().as_str())
+                        .contains(app.data.input.search.to_lowercase().as_str())
                 })
                 .enumerate()
                 .collect::<Vec<_>>();
@@ -639,7 +658,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
 
             for (original_idx, message) in log_messages.into_iter() {
                 let is_selected =
-                    app.selection_index > 0 && app.selection_index - 1 == original_idx;
+                    app.data.selection_index > 0 && app.data.selection_index - 1 == original_idx;
 
                 let text_lines: Vec<&str> = message.split('\n').collect();
                 let mut estimated_height = 0;
@@ -691,10 +710,10 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 let end_y = total_visual_height;
 
                 if is_selected {
-                    if start_y < app.chat_scroll_offset {
-                        app.chat_scroll_offset = start_y;
-                    } else if end_y > app.chat_scroll_offset + max_height {
-                        app.chat_scroll_offset = end_y.saturating_sub(max_height);
+                    if start_y < app.data.scroll_offset {
+                        app.data.scroll_offset = start_y;
+                    } else if end_y > app.data.scroll_offset + max_height {
+                        app.data.scroll_offset = end_y.saturating_sub(max_height);
                     }
                 }
 
@@ -766,14 +785,14 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            if app.selection_index == 0 {
-                app.chat_scroll_offset = total_visual_height.saturating_sub(max_height);
+            if app.data.selection_index == 0 {
+                app.data.scroll_offset = total_visual_height.saturating_sub(max_height);
             }
 
             let title = format!(
                 "vimcord Client - Logs ({}/{})",
-                app.selection_index,
-                app.logs.len()
+                app.data.selection_index,
+                app.data.logs.len()
             );
 
             let paragraph = Paragraph::new(final_content)
@@ -784,7 +803,7 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                         .border_type(BorderType::Double),
                 )
                 .wrap(Wrap { trim: false })
-                .scroll((app.chat_scroll_offset as u16, 0));
+                .scroll((app.data.scroll_offset as u16, 0));
 
             f.render_widget(Clear, chunks[0]);
             f.render_widget(paragraph, chunks[0]);
@@ -809,15 +828,19 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
         let mut filtered_items: Vec<ListItem> = Vec::new();
 
         let filtered_unicode: Vec<&(String, String)> = app
-            .emoji_map
+            .data
+            .emojis
+            .map
             .iter()
-            .filter(|(name, _)| name.starts_with(&app.emoji_filter))
+            .filter(|(name, _)| name.starts_with(&app.data.emojis.filter))
             .collect();
 
         let filtered_custom: Vec<&Emoji> = app
+            .data
+            .guilds
             .custom_emojis
             .iter()
-            .filter(|e| e.name.starts_with(&app.emoji_filter))
+            .filter(|e| e.name.starts_with(&app.data.emojis.filter))
             .collect();
 
         for (name, char) in filtered_unicode.iter() {
@@ -839,7 +862,11 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
         }
 
         if !filtered_items.is_empty() {
-            app.emoji_index = app.emoji_index.min(filtered_items.len().saturating_sub(1));
+            app.data.emojis.index = app
+                .data
+                .emojis
+                .index
+                .min(filtered_items.len().saturating_sub(1));
 
             let emoji_list = List::new(filtered_items)
                 .block(
@@ -854,34 +881,34 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 .highlight_style(Style::default().reversed())
                 .highlight_symbol(">> ");
 
-            let mut state = ListState::default().with_selected(Some(app.emoji_index));
+            let mut state = ListState::default().with_selected(Some(app.data.emojis.index));
             f.render_stateful_widget(emoji_list, popup_rect, &mut state);
         } else {
-            app.emoji_index = 0;
+            app.data.emojis.index = 0;
         }
     }
 
     let is_editing = matches!(&app.state, AppState::Editing(_, _, _));
     let border_color = if is_editing {
         Color::LightMagenta
-    } else if let InputMode::Command = &app.mode {
+    } else if let InputMode::Command = &app.data.input.mode {
         Color::LightGreen
-    } else if let InputMode::Search = &app.mode {
+    } else if let InputMode::Search = &app.data.input.mode {
         Color::LightRed
     } else {
         Color::Reset
     };
     let title_color = if is_editing {
         Color::LightMagenta
-    } else if let InputMode::Command = &app.mode {
+    } else if let InputMode::Command = &app.data.input.mode {
         Color::LightGreen
-    } else if let InputMode::Search = &app.mode {
+    } else if let InputMode::Search = &app.data.input.mode {
         Color::LightRed
     } else {
         Color::Yellow
     };
 
-    let mut display_status_message = app.status_message.clone();
+    let mut display_status_message = app.data.status_message.clone();
 
     let active_channel_id = match &app.state {
         AppState::Chatting(channel) => Some(channel.get_id()),
@@ -891,12 +918,14 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
     };
 
     if let Some(channel_id) = active_channel_id
-        && let Some(typers) = app.typing_users.get(&channel_id)
+        && let Some(typers) = app.data.typing.typing_users.get(&channel_id)
         && !typers.is_empty()
     {
         let mut typers_names = Vec::new();
         for id in typers.keys() {
             let name = app
+                .data
+                .dms
                 .user_names
                 .get(id)
                 .cloned()
@@ -915,39 +944,44 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
             }
         };
 
-        display_status_message = format!("{} | {}", app.status_message, text);
+        display_status_message = format!("{} | {}", app.data.status_message, text);
     }
 
-    let title = match &app.mode {
+    let title = match &app.data.input.mode {
         InputMode::Command => "Command Line".to_string(),
         InputMode::Search => "Searching".to_string(),
         _ => format!("Input: {}", display_status_message),
     };
 
-    let input_text = if app.mode == InputMode::Visual || app.mode == InputMode::VisualLine {
-        if let Some(vim_state) = &app.vim_state {
+    let input_text = if app.data.input.mode == InputMode::Visual
+        || app.data.input.mode == InputMode::VisualLine
+    {
+        if let Some(vim_state) = &app.data.vim.state {
             if let Some(visual_start) = vim_state.visual_start {
-                let mut start = visual_start.min(app.cursor_position);
-                let mut end = visual_start.max(app.cursor_position);
-                let end_len = app.input[end..]
+                let mut start = visual_start.min(app.data.cursor_position);
+                let mut end = visual_start.max(app.data.cursor_position);
+                let end_len = app.data.input.buffer[end..]
                     .chars()
                     .next()
                     .map(|c| c.len_utf8())
                     .unwrap_or(0);
-                end = (end + end_len).min(app.input.len());
+                end = (end + end_len).min(app.data.input.buffer.len());
 
-                if app.mode == InputMode::VisualLine {
-                    start = app.input[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
-                    end = app.input[end..]
+                if app.data.input.mode == InputMode::VisualLine {
+                    start = app.data.input.buffer[..start]
+                        .rfind('\n')
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    end = app.data.input.buffer[end..]
                         .find('\n')
                         .map(|i| end + i + 1)
-                        .unwrap_or(app.input.len());
+                        .unwrap_or(app.data.input.buffer.len());
                 }
 
                 let mut lines = Vec::new();
                 let mut current_pos = 0;
 
-                for line in app.input.split('\n') {
+                for line in app.data.input.buffer.split('\n') {
                     let line_start = current_pos;
                     let line_end = current_pos + line.len();
 
@@ -957,17 +991,18 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
 
                     if overlap_start < overlap_end {
                         if line_start < overlap_start {
-                            spans.push(Span::raw(&app.input[line_start..overlap_start]));
+                            spans
+                                .push(Span::raw(&app.data.input.buffer[line_start..overlap_start]));
                         }
                         spans.push(Span::styled(
-                            &app.input[overlap_start..overlap_end],
+                            &app.data.input.buffer[overlap_start..overlap_end],
                             Style::default().reversed(),
                         ));
                         if overlap_end < line_end {
-                            spans.push(Span::raw(&app.input[overlap_end..line_end]));
+                            spans.push(Span::raw(&app.data.input.buffer[overlap_end..line_end]));
                         }
                     } else {
-                        spans.push(Span::raw(&app.input[line_start..line_end]));
+                        spans.push(Span::raw(&app.data.input.buffer[line_start..line_end]));
                     }
 
                     lines.push(Line::from(spans));
@@ -975,13 +1010,13 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
                 }
                 Text::from(lines)
             } else {
-                Text::from(app.input.as_str())
+                Text::from(app.data.input.buffer.as_str())
             }
         } else {
-            Text::from(app.input.as_str())
+            Text::from(app.data.input.buffer.as_str())
         }
     } else {
-        Text::from(app.input.as_str())
+        Text::from(app.data.input.buffer.as_str())
     };
 
     f.render_widget(
@@ -995,13 +1030,15 @@ pub fn draw_ui(f: &mut ratatui::Frame, app: &mut App) {
         chunks[1],
     );
 
-    if app.selection_index == 0 {
-        let cursor = if app.cursor_position <= app.input.len() && app.cursor_position > 0 {
-            app.cursor_position
+    if app.data.selection_index == 0 {
+        let cursor = if app.data.cursor_position <= app.data.input.buffer.len()
+            && app.data.cursor_position > 0
+        {
+            app.data.cursor_position
         } else {
             0
         };
-        let input_before_cursor = &app.input[..cursor];
+        let input_before_cursor = &app.data.input.buffer[..cursor];
         let cursor_lines = input_before_cursor.split('\n').count();
         let cursor_y = chunks[1].y + cursor_lines as u16;
 

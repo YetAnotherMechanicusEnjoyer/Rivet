@@ -39,10 +39,10 @@ pub async fn handle_command(
                 };
 
                 let actual_status = if status == "invisible_dnd" {
-                    state.is_invisible_dnd = true;
+                    state.data.notifs.is_invisible_dnd = true;
                     "invisible"
                 } else {
-                    state.is_invisible_dnd = false;
+                    state.data.notifs.is_invisible_dnd = false;
                     status.as_str()
                 };
 
@@ -59,7 +59,8 @@ pub async fn handle_command(
                 }
 
                 if let Err(e) = state
-                    .api_client
+                    .client
+                    .api
                     .modify_user_settings(settings_payload)
                     .await
                 {
@@ -72,7 +73,8 @@ pub async fn handle_command(
                 }
 
                 if let Err(e) = state
-                    .gateway_client
+                    .client
+                    .gateway
                     .update_presence(actual_status, status_text.as_deref())
                     .await
                 {
@@ -83,16 +85,20 @@ pub async fn handle_command(
                     .await
                     .ok();
                 } else {
-                    if let Some(user) = state.current_user.clone() {
+                    if let Some(user) = state.data.current_user.clone() {
                         state
+                            .data
+                            .dms
                             .user_statuses
                             .insert(user.id.clone(), actual_status.to_string());
                         if let Some(text) = &status_text {
                             state
+                                .data
+                                .dms
                                 .user_status_texts
                                 .insert(user.id.clone(), text.clone());
                         } else {
-                            state.user_status_texts.remove(&user.id);
+                            state.data.dms.user_status_texts.remove(&user.id);
                         }
                     }
                 }
