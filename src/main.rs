@@ -309,14 +309,11 @@ struct App {
 }
 
 impl App {
-    pub fn setup(client: Client, data: Data) -> Self {
+    pub fn new(client: Client, data: Data) -> Self {
         Self {
             client,
-            state: AppState::default(),
             data,
-
-            tick_count: 0,
-            is_loading: true,
+            ..Default::default()
         }
     }
 }
@@ -364,7 +361,7 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
         log_reader,
         config.display_username,
     );
-    let app_state = Arc::new(Mutex::new(App::setup(client, data)));
+    let app_state = Arc::new(Mutex::new(App::new(client, data)));
 
     let tx_ticker = tx_action.clone();
     let mut rx_shutdown_ticker = tx_shutdown.subscribe();
