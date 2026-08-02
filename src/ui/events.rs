@@ -1837,6 +1837,9 @@ pub async fn handle_keys_events(
                 "Chatting in channel. Press Enter to send message, Esc to return to channels."
                     .to_string();
         }
+        #[cfg(target_os = "windows")]
+        AppAction::DesktopNotification(_, _, _) => {}
+        #[cfg(not(target_os = "windows"))]
         AppAction::DesktopNotification(summary, body, channel_id) => {
             if let Ok(handle) = notify_rust::Notification::new()
                 .summary(&summary)
@@ -1844,7 +1847,6 @@ pub async fn handle_keys_events(
                 .appname("vimcord")
                 .show()
             {
-                #[cfg(not(target_os = "windows"))]
                 state
                     .data
                     .notifs
