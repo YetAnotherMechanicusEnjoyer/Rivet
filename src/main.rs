@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    env, io, process,
+    env, io,
     sync::Arc,
     time::Duration,
 };
@@ -12,7 +12,6 @@ use crossterm::{
     terminal::{EnterAlternateScreen, enable_raw_mode},
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
-use reqwest::Client as ReqwestClient;
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
@@ -27,12 +26,14 @@ use crate::{
         dm::DM,
         guild::{GuildMember, PartialGuild},
     },
+    auth::Auth,
     logs::{LogReader, LogType, get_log_directory, print_log, watch_logs},
     signals::{restore_terminal, setup_ctrlc_handler},
     ui::{draw_ui, handle_input_events, handle_keys_events, vim::VimState},
 };
 
 mod api;
+mod auth;
 mod config;
 mod logs;
 mod signals;
@@ -318,7 +319,7 @@ impl App {
     }
 }
 
-async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
+async fn run_app(config: config::Config) -> Result<(), Error> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -345,14 +346,26 @@ async fn run_app(token: String, config: config::Config) -> Result<(), Error> {
         }
     };
 
-    let client = Client::new(
-        ApiClient::new(
-            ReqwestClient::new(),
-            token.clone(),
-            DISCORD_BASE_URL.to_string(),
-        ),
-        GatewayClient::new(token.clone(), tx_action.clone()),
-    );
+    let auth = Auth::default();
+
+    let token = if let Ok(token) = auth.token_entry.get_secret().await {
+        token
+    } else {
+        const ENV_TOKEN: &str = "DISCORD_TOKEN";
+
+        let t = match env::var(ENV_TOKEN) {
+            Ok(token) => token,
+            Err(e) => {
+                eprintln!("{e}");
+                print_log(e.clone().into(), LogType::Error).await.ok();
+                return Err(format!("Couldn't find env variable 'DISCORD_TOKEN': {e}").into());
+            }
+        };
+        auth.store_token(&t).await?;
+        t
+    };
+
+    let client = auth.validate_token(&token, tx_action.clone()).await?;
     let data = Data::new(
         EmojiData::new(config.emoji_map),
         VimData::new(config.vim_mode),
@@ -556,22 +569,12 @@ async fn main() -> Result<(), Error> {
         .await
         .ok();
     dotenvy::dotenv().ok();
-    const ENV_TOKEN: &str = "DISCORD_TOKEN";
-
-    let token = match env::var(ENV_TOKEN) {
-        Ok(token) => token,
-        Err(e) => {
-            eprintln!("{e}");
-            print_log(e.into(), LogType::Error).await.ok();
-            process::exit(1);
-        }
-    };
 
     setup_ctrlc_handler();
 
     let config = config::load_config().await;
 
-    if let Err(e) = run_app(token, config).await {
+    if let Err(e) = run_app(config).await {
         restore_terminal();
         return Err(e);
     }
