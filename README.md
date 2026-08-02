@@ -81,12 +81,7 @@ Run:
 ```
 
 ## Configuration
-Set your Discord token using one of the following:
-
-### .env file
-```env
-DISCORD_TOKEN="your-token-here"
-```
+Set your Discord token **on the first launch only** using one of the following:
 
 ### Shell
 ```bash
@@ -103,12 +98,6 @@ DISCORD_TOKEN="your-token-here" vimcord
 
 ```bash
 vimcord
-```
-
-or
-
-```env
-DISCORD_TOKEN="your-token-here" vimcord
 ```
 
 ## Keybinds
